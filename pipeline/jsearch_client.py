@@ -1,21 +1,26 @@
 """
 Cliente para JSearch API (RapidAPI), free tier 200 req/mes.
 Devuelve ofertas con enlace directo (LinkedIn cuando la fuente original lo es).
+
+Nota: JSearch migro su endpoint principal de /search a /search-v2 (el antiguo
+devuelve 404). El nuevo endpoint anade el parametro obligatorio 'country'.
 """
 import os
 import httpx
 
-JSEARCH_BASE_URL = "https://jsearch.p.rapidapi.com/search"
+JSEARCH_BASE_URL = "https://jsearch.p.rapidapi.com/search-v2"
 
 
 def search_jobs(query: str, location: str | None, remote_only: bool, date_posted: str = "week") -> list[dict]:
     api_key = os.environ["RAPIDAPI_KEY"]
     host = os.environ.get("RAPIDAPI_JSEARCH_HOST", "jsearch.p.rapidapi.com")
+    country = os.environ.get("JSEARCH_COUNTRY", "es")
     headers = {"X-RapidAPI-Key": api_key, "X-RapidAPI-Host": host}
     params = {
         "query": f"{query} in {location}" if location else query,
         "page": "1",
         "num_pages": "1",
+        "country": country,
         "date_posted": date_posted,
         "employment_types": "FULLTIME",
     }

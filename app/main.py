@@ -59,7 +59,7 @@ def onboarding_submit(
             text("""
                 INSERT INTO profile (id, raw_cv_text, extracted_json, embedding, location_preference,
                     remote_preference, role_family, min_salary)
-                VALUES (1, :raw_cv_text, :extracted_json::jsonb, :embedding::vector, :location_preference,
+                VALUES (1, :raw_cv_text, CAST(:extracted_json AS jsonb), CAST(:embedding AS vector), :location_preference,
                     :remote_preference, :role_family, :min_salary)
                 ON CONFLICT (id) DO UPDATE SET
                     raw_cv_text = EXCLUDED.raw_cv_text,

@@ -3,9 +3,9 @@ Cliente para JSearch API (RapidAPI), free tier 200 req/mes.
 Devuelve ofertas con enlace directo (LinkedIn cuando la fuente original lo es).
 
 Nota: JSearch migro su endpoint principal de /search a /search-v2 (el antiguo
-devuelve 404). El nuevo endpoint anade el parametro obligatorio 'country'.
-Ademas, algunos elementos de 'data' pueden llegar como string JSON en vez de
-objeto ya parseado; se normalizan aqui de forma defensiva.
+devuelve 404). El nuevo endpoint anade el parametro obligatorio 'country', y su
+respuesta anida la lista de ofertas en data['data']['jobs'] (con 'cursor' para
+paginacion), no directamente en data['data'] como en la v1.
 """
 import os
 import json
@@ -34,7 +34,12 @@ def search_jobs(query: str, location: str | None, remote_only: bool, date_posted
         resp = client.get(JSEARCH_BASE_URL, headers=headers, params=params)
     resp.raise_for_status()
     data = resp.json()
-    raw_items = data.get("data", [])
+
+    data_field = data.get("data", [])
+    if isinstance(data_field, dict):
+        raw_items = data_field.get("jobs", [])
+    else:
+        raw_items = data_field
 
     jobs: list[dict] = []
     for item in raw_items:
@@ -42,12 +47,12 @@ def search_jobs(query: str, location: str | None, remote_only: bool, date_posted
             try:
                 item = json.loads(item)
             except json.JSONDecodeError:
-                print(f"[jsearch_client] Entrada de 'data' no es JSON valido, se ignora: {item[:200]}")
+                print(f"[jsearch_client] Entrada no es JSON valido, se ignora: {item[:200]}")
                 continue
         if isinstance(item, dict):
             jobs.append(item)
         else:
-            print(f"[jsearch_client] Entrada de 'data' con tipo inesperado ({type(item)}), se ignora.")
+            print(f"[jsearch_client] Entrada con tipo inesperado ({type(item)}), se ignora.")
     return jobs
 
 

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+{% if detail %}
+  <h1>{{ detail.title }} — {{ detail.company }}</h1>
+  <p><span class="badge {{ 'linkedin' if detail.source == 'linkedin' else '' }}">{{ detail.source }}</span>
+     {{ detail.location }} · {{ detail.remote_type }}</p>
+  <p class="score">Score final: {{ detail.final_score }} (LLM: {{ detail.llm_score }})</p>
+  <h3>Pros</h3>
+  <ul>{% for p in (detail.pros or []) %}<li>{{ p }}</li>{% endfor %}</ul>
+  <h3>Contras</h3>
+  <ul>{% for c in (detail.cons or []) %}<li>{{ c }}</li>{% endfor %}</ul>
+  <h3>Requisitos que faltan</h3>
+  <ul>{% for m in (detail.missing_requirements or []) %}<li>{{ m }}</li>{% endfor %}</ul>
+  <p><a href="{{ detail.apply_link }}" target="_blank">Ir a la oferta original</a></p>
+  <p><a href="/dashboard">Volver al dashboard</a></p>
+{% else %}
+  <h1>Ofertas rankeadas</h1>
+  <table>
+    <thead>
+      <tr><th>Score</th><th>Titulo</th><th>Empresa</th><th>Fuente</th><th>Ubicacion</th><th>Estado</th><th>Enlace</th></tr>
+    </thead>
+    <tbody>
+      {% for job in jobs %}
+      <tr>
+        <td class="score">{{ job.final_score | round(1) }}</td>
+        <td><a href="/dashboard/{{ job.id }}">{{ job.title }}</a>{% if not job.llm_evaluated %} <em>(pendiente LLM)</em>{% endif %}</td>
+        <td>{{ job.company }}</td>
+        <td><span class="badge {{ 'linkedin' if job.source == 'linkedin' else '' }}">{{ job.source }}</span></td>
+        <td>{{ job.location }} ({{ job.remote_type }})</td>
+        <td>{{ job.status }}</td>
+        <td><a href="{{ job.apply_link }}" target="_blank">Ver</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+{% endblock %}

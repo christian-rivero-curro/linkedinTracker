@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Perfil y preferencias</h1>
+{% if has_profile %}<p>Ya tienes un perfil guardado. Guardar el formulario lo sobrescribira.</p>{% endif %}
+<form method="post" action="/onboarding">
+  <label for="raw_cv_text">Pega el texto de tu CV</label>
+  <textarea id="raw_cv_text" name="raw_cv_text" rows="12" required></textarea>
+
+  <label for="location_preference">Ubicacion preferida</label>
+  <input id="location_preference" name="location_preference" type="text" placeholder="Barcelona, Spain">
+
+  <label for="remote_preference">Modalidad</label>
+  <select id="remote_preference" name="remote_preference">
+    <option value="any">Cualquiera</option>
+    <option value="remote">Remoto</option>
+    <option value="hybrid">Hibrido</option>
+    <option value="onsite">Presencial</option>
+  </select>
+
+  <label for="role_family">Familias de rol (separadas por comas)</label>
+  <input id="role_family" name="role_family" type="text" placeholder="backend, cloud-architect, devops">
+
+  <label for="min_salary">Salario minimo (opcional, anual bruto)</label>
+  <input id="min_salary" name="min_salary" type="number">
+
+  <button type="submit">Guardar y extraer perfil</button>
+</form>
+{% endblock %}

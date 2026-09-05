@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>linkedinTracker</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <style>
+    body { font-family: sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+    nav a { margin-right: 1rem; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    th, td { border-bottom: 1px solid #ddd; padding: 0.5rem; text-align: left; font-size: 0.9rem; }
+    .score { font-weight: bold; }
+    .badge { padding: 0.1rem 0.5rem; border-radius: 4px; font-size: 0.75rem; background: #eee; }
+    .linkedin { background: #0a66c2; color: white; }
+    form label { display: block; margin-top: 0.75rem; font-weight: bold; }
+    input, select, textarea { width: 100%; padding: 0.4rem; margin-top: 0.25rem; }
+    button { margin-top: 1rem; padding: 0.5rem 1.2rem; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <nav>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/onboarding">Perfil / CV</a>
+  </nav>
+  <hr>
+  {% block content %}{% endblock %}
+</body>
+</html>

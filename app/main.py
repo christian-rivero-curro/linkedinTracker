@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -13,7 +14,7 @@ from dotenv import load_dotenv
 from app.db import get_engine
 from app.schemas import JobStatusUpdate
 from pipeline.cv_extractor import extract_cv
-from pipeline.embeddings import embed_text
+from pipeline.embeddings import embed_text, to_pgvector_literal
 
 load_dotenv()
 
@@ -58,7 +59,7 @@ def onboarding_submit(
             text("""
                 INSERT INTO profile (id, raw_cv_text, extracted_json, embedding, location_preference,
                     remote_preference, role_family, min_salary)
-                VALUES (1, :raw_cv_text, :extracted_json, :embedding, :location_preference,
+                VALUES (1, :raw_cv_text, :extracted_json::jsonb, :embedding::vector, :location_preference,
                     :remote_preference, :role_family, :min_salary)
                 ON CONFLICT (id) DO UPDATE SET
                     raw_cv_text = EXCLUDED.raw_cv_text,
@@ -72,8 +73,8 @@ def onboarding_submit(
             """),
             {
                 "raw_cv_text": raw_cv_text,
-                "extracted_json": extracted,
-                "embedding": embedding,
+                "extracted_json": json.dumps(extracted),
+                "embedding": to_pgvector_literal(embedding),
                 "location_preference": location_preference or None,
                 "remote_preference": remote_preference,
                 "role_family": roles,

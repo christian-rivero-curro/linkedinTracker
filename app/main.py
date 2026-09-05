@@ -33,9 +33,15 @@ def root():
 def onboarding_form(request: Request):
     engine = get_engine()
     with engine.connect() as conn:
-        existing = conn.execute(text("SELECT id FROM profile WHERE id = 1")).first()
+        row = conn.execute(
+            text("""
+                SELECT raw_cv_text, location_preference, remote_preference, role_family, min_salary
+                FROM profile WHERE id = 1
+            """)
+        ).mappings().first()
+    profile = dict(row) if row else None
     return templates.TemplateResponse(
-        "onboarding.html", {"request": request, "has_profile": existing is not None}
+        "onboarding.html", {"request": request, "has_profile": profile is not None, "profile": profile}
     )
 
 

@@ -1,27 +1,28 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Perfil y preferencias</h1>
-{% if has_profile %}<p>Ya tienes un perfil guardado. Guardar el formulario lo sobrescribira.</p>{% endif %}
+{% if has_profile %}<p>Ya tienes un perfil guardado. Puedes revisar y editar los datos abajo; al guardar se sobrescribira.</p>{% endif %}
 <form method="post" action="/onboarding">
   <label for="raw_cv_text">Pega el texto de tu CV</label>
-  <textarea id="raw_cv_text" name="raw_cv_text" rows="12" required></textarea>
+  <textarea id="raw_cv_text" name="raw_cv_text" rows="12" required>{{ profile.raw_cv_text if profile else '' }}</textarea>
 
   <label for="location_preference">Ubicacion preferida</label>
-  <input id="location_preference" name="location_preference" type="text" placeholder="Barcelona, Spain">
+  <input id="location_preference" name="location_preference" type="text" placeholder="Barcelona, Spain" value="{{ profile.location_preference if profile and profile.location_preference else '' }}">
 
   <label for="remote_preference">Modalidad</label>
   <select id="remote_preference" name="remote_preference">
-    <option value="any">Cualquiera</option>
-    <option value="remote">Remoto</option>
-    <option value="hybrid">Hibrido</option>
-    <option value="onsite">Presencial</option>
+    {% set current_remote = profile.remote_preference if profile else 'any' %}
+    <option value="any" {{ 'selected' if current_remote == 'any' else '' }}>Cualquiera</option>
+    <option value="remote" {{ 'selected' if current_remote == 'remote' else '' }}>Remoto</option>
+    <option value="hybrid" {{ 'selected' if current_remote == 'hybrid' else '' }}>Hibrido</option>
+    <option value="onsite" {{ 'selected' if current_remote == 'onsite' else '' }}>Presencial</option>
   </select>
 
   <label for="role_family">Familias de rol (separadas por comas)</label>
-  <input id="role_family" name="role_family" type="text" placeholder="backend, cloud-architect, devops">
+  <input id="role_family" name="role_family" type="text" placeholder="backend, cloud-architect, devops" value="{{ (profile.role_family | join(', ')) if profile and profile.role_family else '' }}">
 
   <label for="min_salary">Salario minimo (opcional, anual bruto)</label>
-  <input id="min_salary" name="min_salary" type="number">
+  <input id="min_salary" name="min_salary" type="number" value="{{ profile.min_salary if profile and profile.min_salary else '' }}">
 
   <button type="submit">Guardar y extraer perfil</button>
 </form>

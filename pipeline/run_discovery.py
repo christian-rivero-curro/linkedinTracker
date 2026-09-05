@@ -110,7 +110,7 @@ def main():
                         INSERT INTO job_offer (external_id, title, company, location, remote_type,
                             description, apply_link, source, salary_min, salary_max, posted_at, embedding)
                         VALUES (:external_id, :title, :company, :location, :remote_type,
-                            :description, :apply_link, :source, :salary_min, :salary_max, :posted_at, :embedding::vector)
+                            :description, :apply_link, :source, :salary_min, :salary_max, :posted_at, CAST(:embedding AS vector))
                         RETURNING id
                     """),
                     {**job, "embedding": to_pgvector_literal(job_embedding)},

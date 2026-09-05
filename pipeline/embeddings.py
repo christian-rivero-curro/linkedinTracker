@@ -28,3 +28,17 @@ def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     if denom == 0:
         return 0.0
     return float(np.dot(a, b) / denom)
+
+
+def to_pgvector_literal(vec: list[float]) -> str:
+    """Serializa una lista de floats al formato de texto que pgvector espera (ej. '[0.1,0.2,...]')."""
+    return "[" + ",".join(repr(float(v)) for v in vec) + "]"
+
+
+def parse_pgvector(value) -> list[float]:
+    """Convierte el valor devuelto por psycopg2 para una columna vector (texto '[0.1,0.2,...]') a list[float]."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [float(x) for x in value.strip("[]").split(",") if x]
+    return list(value)

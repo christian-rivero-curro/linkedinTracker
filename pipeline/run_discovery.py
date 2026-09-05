@@ -57,6 +57,31 @@ def load_profile(engine) -> dict | None:
     return profile
 
 
+def build_search_query(profile: dict) -> str:
+    """
+    Construye una query corta y natural para JSearch (que funciona como Google for Jobs,
+    no como un filtro AND de keywords). Prioriza un titulo de rol real del CV
+    (equivalent_roles) y anade como mucho 1 skill relevante, evitando concatenar
+    docenas de palabras que no coinciden con ninguna oferta real.
+    """
+    extracted = profile.get("extracted_json") or {}
+    equivalent_roles = extracted.get("equivalent_roles") or []
+    role_family = profile.get("role_family") or []
+    skills = extracted.get("skills") or []
+
+    if equivalent_roles:
+        role_title = equivalent_roles[0]
+    elif role_family:
+        role_title = role_family[0]
+    else:
+        role_title = "software engineer"
+
+    query = role_title
+    if len(role_title.split()) <= 1 and skills:
+        query = f"{role_title} {skills[0]}"
+    return query
+
+
 def main():
     engine = get_engine()
     started_at = datetime.now(timezone.utc)
@@ -78,10 +103,10 @@ def main():
             _log_run(engine, started_at, jsearch_calls, llm_calls, new_jobs_found, errors)
             return
 
-        top_skills = list(profile["extracted_json"].get("skills", []))[:5]
-        query = " ".join(profile.get("role_family", []) + top_skills).strip() or "software engineer"
+        query = build_search_query(profile)
         remote_only = profile.get("remote_preference") == "remote"
 
+        print(f"JSearch query: '{query}', location: '{profile.get('location_preference')}', remote_only: {remote_only}")
         raw_jobs = search_jobs(query=query, location=profile.get("location_preference"), remote_only=remote_only)
         jsearch_calls += 1
 

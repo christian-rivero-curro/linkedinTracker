@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.db import get_engine  # noqa: E402
 from pipeline.jsearch_client import search_jobs, normalize_job  # noqa: E402
-from pipeline.embeddings import embed_text, cosine_similarity  # noqa: E402
+from pipeline.embeddings import embed_text, cosine_similarity, to_pgvector_literal, parse_pgvector  # noqa: E402
 from pipeline.scoring import (  # noqa: E402
     is_blacklisted,
     hard_requirements_score,
@@ -50,7 +50,11 @@ def check_budget(engine) -> tuple[bool, int, int]:
 def load_profile(engine) -> dict | None:
     with engine.connect() as conn:
         row = conn.execute(text("SELECT * FROM profile WHERE id = 1")).mappings().first()
-    return dict(row) if row else None
+    if row is None:
+        return None
+    profile = dict(row)
+    profile["embedding"] = parse_pgvector(profile["embedding"])
+    return profile
 
 
 def main():
@@ -106,10 +110,10 @@ def main():
                         INSERT INTO job_offer (external_id, title, company, location, remote_type,
                             description, apply_link, source, salary_min, salary_max, posted_at, embedding)
                         VALUES (:external_id, :title, :company, :location, :remote_type,
-                            :description, :apply_link, :source, :salary_min, :salary_max, :posted_at, :embedding)
+                            :description, :apply_link, :source, :salary_min, :salary_max, :posted_at, :embedding::vector)
                         RETURNING id
                     """),
-                    {**job, "embedding": job_embedding},
+                    {**job, "embedding": to_pgvector_literal(job_embedding)},
                 )
                 job_offer_id = result.scalar()
                 new_jobs_found += 1

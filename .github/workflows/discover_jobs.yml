@@ -1,0 +1,24 @@
+name: discover_jobs
+on:
+  schedule:
+    - cron: '0 */4 * * *'
+  workflow_dispatch: {}
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python pipeline/run_discovery.py
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
+          RAPIDAPI_JSEARCH_HOST: jsearch.p.rapidapi.com
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL_EXTRACTION: ${{ vars.OPENROUTER_MODEL_EXTRACTION }}
+          OPENROUTER_MODEL_SCORING: ${{ vars.OPENROUTER_MODEL_SCORING }}
+          JSEARCH_MONTHLY_BUDGET: '180'
+          LLM_DAILY_BUDGET: '48'

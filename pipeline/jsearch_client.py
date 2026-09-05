@@ -2,10 +2,11 @@
 Cliente para JSearch API (RapidAPI), free tier 200 req/mes.
 Devuelve ofertas con enlace directo (LinkedIn cuando la fuente original lo es).
 
-Nota: JSearch migro su endpoint principal de /search a /search-v2 (el antiguo
-devuelve 404). El nuevo endpoint anade el parametro obligatorio 'country', y su
-respuesta anida la lista de ofertas en data['data']['jobs'] (con 'cursor' para
-paginacion), no directamente en data['data'] como en la v1.
+Notas sobre /search-v2 (segun documentacion oficial de OpenWeb Ninja):
+- La lista real de ofertas esta en data['data']['jobs'] (con 'cursor' para paginacion),
+  no directamente en data['data'] como en la v1.
+- Para queries fuera de EE.UU. hay que combinar 'country' Y 'language'.
+- El filtro de solo remoto se llama 'work_from_home' (no 'remote_jobs_only').
 """
 import os
 import json
@@ -18,17 +19,19 @@ def search_jobs(query: str, location: str | None, remote_only: bool, date_posted
     api_key = os.environ["RAPIDAPI_KEY"]
     host = os.environ.get("RAPIDAPI_JSEARCH_HOST", "jsearch.p.rapidapi.com")
     country = os.environ.get("JSEARCH_COUNTRY", "es")
+    language = os.environ.get("JSEARCH_LANGUAGE", "en")
     headers = {"X-RapidAPI-Key": api_key, "X-RapidAPI-Host": host}
     params = {
         "query": f"{query} in {location}" if location else query,
         "page": "1",
         "num_pages": "1",
         "country": country,
+        "language": language,
         "date_posted": date_posted,
         "employment_types": "FULLTIME",
     }
     if remote_only:
-        params["remote_jobs_only"] = "true"
+        params["work_from_home"] = "true"
 
     with httpx.Client(timeout=30) as client:
         resp = client.get(JSEARCH_BASE_URL, headers=headers, params=params)

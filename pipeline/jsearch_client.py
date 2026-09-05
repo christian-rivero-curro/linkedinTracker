@@ -4,8 +4,11 @@ Devuelve ofertas con enlace directo (LinkedIn cuando la fuente original lo es).
 
 Nota: JSearch migro su endpoint principal de /search a /search-v2 (el antiguo
 devuelve 404). El nuevo endpoint anade el parametro obligatorio 'country'.
+Ademas, algunos elementos de 'data' pueden llegar como string JSON en vez de
+objeto ya parseado; se normalizan aqui de forma defensiva.
 """
 import os
+import json
 import httpx
 
 JSEARCH_BASE_URL = "https://jsearch.p.rapidapi.com/search-v2"
@@ -31,7 +34,21 @@ def search_jobs(query: str, location: str | None, remote_only: bool, date_posted
         resp = client.get(JSEARCH_BASE_URL, headers=headers, params=params)
     resp.raise_for_status()
     data = resp.json()
-    return data.get("data", [])
+    raw_items = data.get("data", [])
+
+    jobs: list[dict] = []
+    for item in raw_items:
+        if isinstance(item, str):
+            try:
+                item = json.loads(item)
+            except json.JSONDecodeError:
+                print(f"[jsearch_client] Entrada de 'data' no es JSON valido, se ignora: {item[:200]}")
+                continue
+        if isinstance(item, dict):
+            jobs.append(item)
+        else:
+            print(f"[jsearch_client] Entrada de 'data' con tipo inesperado ({type(item)}), se ignora.")
+    return jobs
 
 
 def normalize_job(raw: dict) -> dict:

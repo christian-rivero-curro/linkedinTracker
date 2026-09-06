@@ -24,6 +24,7 @@ from pipeline.scoring import (  # noqa: E402
     evaluate_job_with_llm,
     compute_final_score,
 )
+from pipeline.query_variants import get_or_seed_variant, mark_variant_run  # noqa: E402
 
 JSEARCH_MONTHLY_BUDGET = int(os.environ.get("JSEARCH_MONTHLY_BUDGET", 180))
 LLM_DAILY_BUDGET = int(os.environ.get("LLM_DAILY_BUDGET", 48))
@@ -57,31 +58,6 @@ def load_profile(engine) -> dict | None:
     return profile
 
 
-def build_search_query(profile: dict) -> str:
-    """
-    Construye una query corta y natural para JSearch (que funciona como Google for Jobs,
-    no como un filtro AND de keywords). Prioriza un titulo de rol real del CV
-    (equivalent_roles) y anade como mucho 1 skill relevante, evitando concatenar
-    docenas de palabras que no coinciden con ninguna oferta real.
-    """
-    extracted = profile.get("extracted_json") or {}
-    equivalent_roles = extracted.get("equivalent_roles") or []
-    role_family = profile.get("role_family") or []
-    skills = extracted.get("skills") or []
-
-    if equivalent_roles:
-        role_title = equivalent_roles[0]
-    elif role_family:
-        role_title = role_family[0]
-    else:
-        role_title = "software engineer"
-
-    query = role_title
-    if len(role_title.split()) <= 1 and skills:
-        query = f"{role_title} {skills[0]}"
-    return query
-
-
 def safe_text(value) -> str:
     """Fuerza cualquier valor a str no vacio, para evitar tipos inesperados en embed_text()."""
     if value is None:
@@ -91,6 +67,25 @@ def safe_text(value) -> str:
     return value
 
 
+def parse_posted_at(value):
+    """Parseo defensivo del timestamp de publicacion de una oferta. Nunca lanza:
+    si no se puede interpretar, devuelve None (y esa oferta no se filtra por cutoff,
+    se procesa igualmente para no perder posibles matches por un formato inesperado).
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        text_value = str(value).strip()
+        if text_value.endswith("Z"):
+            text_value = text_value[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(text_value)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
 def main():
     engine = get_engine()
     started_at = datetime.now(timezone.utc)
@@ -98,6 +93,8 @@ def main():
     llm_calls = 0
     new_jobs_found = 0
     errors = []
+    variant = None
+    newest_posted_at = None
 
     try:
         profile = load_profile(engine)
@@ -112,10 +109,21 @@ def main():
             _log_run(engine, started_at, jsearch_calls, llm_calls, new_jobs_found, errors)
             return
 
-        query = build_search_query(profile)
+        try:
+            variant = get_or_seed_variant(engine, 1, profile)
+        except RuntimeError as e:
+            errors.append(str(e))
+            _log_run(engine, started_at, jsearch_calls, llm_calls, new_jobs_found, errors)
+            return
+
+        query = variant["query_text"]
+        cutoff = variant.get("last_posted_cutoff_utc")
         remote_only = profile.get("remote_preference") == "remote"
 
-        print(f"JSearch query: '{query}', location: '{profile.get('location_preference')}', remote_only: {remote_only}")
+        print(
+            f"JSearch query (variante '{variant['query_text']}', id={variant['id']}): "
+            f"location='{profile.get('location_preference')}', remote_only={remote_only}, cutoff={cutoff}"
+        )
         raw_jobs = search_jobs(query=query, location=profile.get("location_preference"), remote_only=remote_only)
         jsearch_calls += 1
 
@@ -124,6 +132,14 @@ def main():
                 job = normalize_job(raw)
                 if not job["external_id"] or not job["apply_link"]:
                     continue
+
+                posted_at = parse_posted_at(job.get("posted_at"))
+                if posted_at is not None and (newest_posted_at is None or posted_at > newest_posted_at):
+                    newest_posted_at = posted_at
+
+                if cutoff is not None and posted_at is not None and posted_at <= cutoff:
+                    continue
+
                 if is_blacklisted(job["title"]) and not any(
                     kw in job["title"].lower() for kw in profile.get("role_family", [])
                 ):
@@ -215,6 +231,11 @@ def main():
     except Exception:
         errors.append(traceback.format_exc())
     finally:
+        if variant is not None:
+            try:
+                mark_variant_run(engine, variant["id"], newest_posted_at)
+            except Exception as e:
+                errors.append(f"Error actualizando cutoff de variante {variant.get('id')}: {e}")
         _log_run(engine, started_at, jsearch_calls, llm_calls, new_jobs_found, errors)
 
 

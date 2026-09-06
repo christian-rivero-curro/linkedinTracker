@@ -1,11 +1,10 @@
 """
 Gestion de variantes de query de busqueda (tabla search_query_variant).
 
-En vez de una unica query fija por ejecucion del cron, se mantiene una lista de
-variantes (roles/skills) editable desde /onboarding. Cada ejecucion selecciona
-la variante menos usada recientemente (rotacion auto-regulada por last_run_at),
-y lleva un cursor temporal (last_posted_cutoff_utc) por variante para evitar
-reprocesar las mismas ofertas entre ejecuciones sucesivas.
+Cada ejecucion del cron consulta TODAS las variantes activas (no una sola por
+rotacion), para hacer un barrido exhaustivo del perfil. Cada variante lleva su
+propio cursor temporal (last_posted_cutoff_utc) para evitar reprocesar las
+mismas ofertas entre ejecuciones sucesivas de esa variante concreta.
 
 Tambien incluye la generacion asistida por IA de variantes (boton en
 /onboarding): siempre en modo 'append', nunca sobrescribe lo que el usuario
@@ -88,30 +87,35 @@ def seed_default_variants(engine, profile_id: int, profile: dict) -> None:
             )
 
 
-def pick_next_variant(engine, profile_id: int = 1) -> dict | None:
+def get_or_seed_variants(engine, profile_id: int, profile: dict) -> list[dict]:
     """
-    Selecciona la variante activa que menos recientemente se ha usado.
-    Se auto-regula si se anaden/desactivan variantes entre ejecuciones,
-    sin necesidad de llevar un indice de rotacion aparte.
+    Punto de entrada usado por el cron: si no hay ninguna variante (activa o no)
+    para el perfil, siembra las iniciales; despues devuelve TODAS las variantes
+    activas, para que la ejecucion las consulte todas (analisis exhaustivo).
     """
     with engine.connect() as conn:
-        row = conn.execute(
-            text("""
-                SELECT * FROM search_query_variant
-                WHERE profile_id = :pid AND is_active = TRUE
-                ORDER BY last_run_at ASC NULLS FIRST, order_index ASC
-                LIMIT 1
-            """),
+        count = conn.execute(
+            text("SELECT COUNT(*) FROM search_query_variant WHERE profile_id = :pid"),
             {"pid": profile_id},
-        ).mappings().first()
-    return dict(row) if row else None
+        ).scalar()
+    if not count:
+        seed_default_variants(engine, profile_id, profile)
+
+    variants = get_active_variants(engine, profile_id)
+    if not variants:
+        raise RuntimeError(
+            "No hay variantes de busqueda activas para el perfil. "
+            "Activa al menos una desde /onboarding."
+        )
+    return variants
 
 
 def mark_variant_run(engine, variant_id: int, newest_posted_at: datetime | None) -> None:
     """
     Actualiza last_run_at a ahora, y last_posted_cutoff_utc al timestamp mas
-    reciente de las ofertas realmente procesadas en esta ejecucion (o se deja
-    igual/ahora si no hubo ofertas nuevas, para no perder cobertura).
+    reciente de las ofertas realmente procesadas en esta ejecucion para esa
+    variante (o se deja igual/ahora si no hubo ofertas nuevas, para no perder
+    cobertura).
     """
     with engine.begin() as conn:
         conn.execute(
@@ -124,30 +128,6 @@ def mark_variant_run(engine, variant_id: int, newest_posted_at: datetime | None)
             """),
             {"id": variant_id, "newest": newest_posted_at, "now": datetime.now(timezone.utc)},
         )
-
-
-def get_or_seed_variant(engine, profile_id: int, profile: dict) -> dict:
-    """
-    Punto de entrada usado por el cron: si no hay ninguna variante (activa o no)
-    para el perfil, siembra las iniciales; despues selecciona la variante a usar
-    en esta ejecucion.
-    """
-    with engine.connect() as conn:
-        count = conn.execute(
-            text("SELECT COUNT(*) FROM search_query_variant WHERE profile_id = :pid"),
-            {"pid": profile_id},
-        ).scalar()
-    if not count:
-        seed_default_variants(engine, profile_id, profile)
-
-    variant = pick_next_variant(engine, profile_id)
-    if variant is None:
-        # Todas las variantes existentes estan desactivadas: no hay nada que buscar.
-        raise RuntimeError(
-            "No hay variantes de busqueda activas para el perfil. "
-            "Activa al menos una desde /onboarding."
-        )
-    return variant
 
 
 def generate_variants_via_llm(profile: dict) -> list[str]:

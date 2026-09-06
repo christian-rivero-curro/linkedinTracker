@@ -13,9 +13,11 @@ Notas sobre /search-v2 (segun documentacion oficial de OpenWeb Ninja):
   relevancia interna de Google for Jobs, no cronologico. Por eso el filtrado
   real por fecha se hace del lado del cliente en pipeline/run_discovery.py
   usando job_posted_at_datetime_utc, sin confiar en el orden de la respuesta.
-- num_pages controla cuantas paginas agrega la API en una sola llamada
-  (server-side). Empezar en 1 y subir solo tras verificar en el dashboard de
-  RapidAPI si num_pages>1 consume mas de 1 credito por llamada.
+- 'page' permite pedir paginas sucesivas (1, 2, 3...) en llamadas separadas;
+  cada llamada consume 1 credito de la cuota mensual, sea cual sea la pagina.
+- 'num_pages' controla si la API agrega varias paginas en una sola llamada
+  (server-side); se deja en 1 por defecto y se usa 'page' para paginar de forma
+  controlada y poder parar en cuanto los resultados dejan de aportar nada nuevo.
 - La API es un agregador de terceros (Jobrapido, Bing Jobs, Jooble, etc.) y sus
   campos no son 100% fiables en tipo ni encoding: normalize_job() sanea todo
   texto (fuerza str, elimina surrogates sueltos/mojibake) y coacciona salarios
@@ -35,6 +37,7 @@ def search_jobs(
     remote_only: bool,
     date_posted: str | None = None,
     num_pages: int | None = None,
+    page: int = 1,
 ) -> list[dict]:
     api_key = os.environ["RAPIDAPI_KEY"]
     host = os.environ.get("RAPIDAPI_JSEARCH_HOST", "jsearch.p.rapidapi.com")
@@ -48,7 +51,7 @@ def search_jobs(
     headers = {"X-RapidAPI-Key": api_key, "X-RapidAPI-Host": host}
     params = {
         "query": f"{query} in {location}" if location else query,
-        "page": "1",
+        "page": str(max(1, int(page))),
         "num_pages": str(max(1, num_pages)),
         "country": country,
         "language": language,

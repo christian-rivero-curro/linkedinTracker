@@ -1,6 +1,5 @@
 import os
 import sys
-import json
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -14,7 +13,8 @@ from dotenv import load_dotenv
 from app.db import get_engine
 from app.schemas import JobStatusUpdate
 from pipeline.cv_extractor import extract_cv
-from pipeline.embeddings import embed_text, to_pgvector_literal
+from pipeline.embeddings import embed_text
+from pipeline.query_variants import get_all_variants, generate_variants_via_llm, add_ai_variants
 
 load_dotenv()
 
@@ -40,8 +40,16 @@ def onboarding_form(request: Request):
             """)
         ).mappings().first()
     profile = dict(row) if row else None
+
+    try:
+        variants = get_all_variants(engine, profile_id=1)
+    except Exception as e:
+        print(f"[onboarding] No se pudieron leer las variantes de busqueda (¿migracion aplicada?): {e}")
+        variants = []
+
     return templates.TemplateResponse(
-        "onboarding.html", {"request": request, "has_profile": profile is not None, "profile": profile}
+        "onboarding.html",
+        {"request": request, "has_profile": profile is not None, "profile": profile, "variants": variants},
     )
 
 
@@ -65,7 +73,7 @@ def onboarding_submit(
             text("""
                 INSERT INTO profile (id, raw_cv_text, extracted_json, embedding, location_preference,
                     remote_preference, role_family, min_salary)
-                VALUES (1, :raw_cv_text, CAST(:extracted_json AS jsonb), CAST(:embedding AS vector), :location_preference,
+                VALUES (1, :raw_cv_text, :extracted_json, :embedding, :location_preference,
                     :remote_preference, :role_family, :min_salary)
                 ON CONFLICT (id) DO UPDATE SET
                     raw_cv_text = EXCLUDED.raw_cv_text,
@@ -79,8 +87,8 @@ def onboarding_submit(
             """),
             {
                 "raw_cv_text": raw_cv_text,
-                "extracted_json": json.dumps(extracted),
-                "embedding": to_pgvector_literal(embedding),
+                "extracted_json": extracted,
+                "embedding": embedding,
                 "location_preference": location_preference or None,
                 "remote_preference": remote_preference,
                 "role_family": roles,
@@ -88,6 +96,82 @@ def onboarding_submit(
             },
         )
     return RedirectResponse(url="/dashboard", status_code=303)
+
+
+@app.post("/onboarding/variants/add")
+def add_variant(query_text: str = Form(...)):
+    cleaned = query_text.strip()
+    if cleaned:
+        engine = get_engine()
+        with engine.connect() as conn:
+            max_order = conn.execute(
+                text("SELECT COALESCE(MAX(order_index), -1) FROM search_query_variant WHERE profile_id = 1")
+            ).scalar()
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO search_query_variant (profile_id, query_text, source, order_index)
+                    VALUES (1, :qt, 'manual', :order_index)
+                """),
+                {"qt": cleaned, "order_index": max_order + 1},
+            )
+    return RedirectResponse(url="/onboarding", status_code=303)
+
+
+@app.post("/onboarding/variants/{variant_id}/update")
+def update_variant(variant_id: int, query_text: str = Form(...)):
+    cleaned = query_text.strip()
+    if cleaned:
+        engine = get_engine()
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    UPDATE search_query_variant SET query_text = :qt, updated_at = now()
+                    WHERE id = :id AND profile_id = 1
+                """),
+                {"qt": cleaned, "id": variant_id},
+            )
+    return RedirectResponse(url="/onboarding", status_code=303)
+
+
+@app.post("/onboarding/variants/{variant_id}/toggle")
+def toggle_variant(variant_id: int):
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                UPDATE search_query_variant SET is_active = NOT is_active, updated_at = now()
+                WHERE id = :id AND profile_id = 1
+            """),
+            {"id": variant_id},
+        )
+    return RedirectResponse(url="/onboarding", status_code=303)
+
+
+@app.post("/onboarding/variants/{variant_id}/delete")
+def delete_variant(variant_id: int):
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(
+            text("DELETE FROM search_query_variant WHERE id = :id AND profile_id = 1"),
+            {"id": variant_id},
+        )
+    return RedirectResponse(url="/onboarding", status_code=303)
+
+
+@app.post("/onboarding/variants/generate")
+def generate_variants():
+    engine = get_engine()
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT * FROM profile WHERE id = 1")).mappings().first()
+    if row is not None:
+        profile = dict(row)
+        try:
+            suggestions = generate_variants_via_llm(profile)
+            add_ai_variants(engine, 1, suggestions)
+        except Exception as e:
+            print(f"[onboarding] Error generando variantes con IA: {e}")
+    return RedirectResponse(url="/onboarding", status_code=303)
 
 
 @app.get("/dashboard")

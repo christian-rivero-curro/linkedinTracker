@@ -9,6 +9,13 @@ Notas sobre /search-v2 (segun documentacion oficial de OpenWeb Ninja):
 - El filtro de solo remoto se llama 'work_from_home' (no 'remote_jobs_only').
 - date_posted='week' puede devolver 0 resultados para roles de nicho en ciudades
   concretas (validado manualmente); por defecto se usa 'month' via JSEARCH_DATE_POSTED.
+- No existe parametro de ordenacion (sort_by): el orden de resultados es la
+  relevancia interna de Google for Jobs, no cronologico. Por eso el filtrado
+  real por fecha se hace del lado del cliente en pipeline/run_discovery.py
+  usando job_posted_at_datetime_utc, sin confiar en el orden de la respuesta.
+- num_pages controla cuantas paginas agrega la API en una sola llamada
+  (server-side). Empezar en 1 y subir solo tras verificar en el dashboard de
+  RapidAPI si num_pages>1 consume mas de 1 credito por llamada.
 """
 import os
 import json
@@ -17,18 +24,27 @@ import httpx
 JSEARCH_BASE_URL = "https://jsearch.p.rapidapi.com/search-v2"
 
 
-def search_jobs(query: str, location: str | None, remote_only: bool, date_posted: str | None = None) -> list[dict]:
+def search_jobs(
+    query: str,
+    location: str | None,
+    remote_only: bool,
+    date_posted: str | None = None,
+    num_pages: int | None = None,
+) -> list[dict]:
     api_key = os.environ["RAPIDAPI_KEY"]
     host = os.environ.get("RAPIDAPI_JSEARCH_HOST", "jsearch.p.rapidapi.com")
     country = os.environ.get("JSEARCH_COUNTRY", "es")
     language = os.environ.get("JSEARCH_LANGUAGE", "en")
     if date_posted is None:
         date_posted = os.environ.get("JSEARCH_DATE_POSTED", "month")
+    if num_pages is None:
+        num_pages = int(os.environ.get("JSEARCH_NUM_PAGES", "1"))
+
     headers = {"X-RapidAPI-Key": api_key, "X-RapidAPI-Host": host}
     params = {
         "query": f"{query} in {location}" if location else query,
         "page": "1",
-        "num_pages": "1",
+        "num_pages": str(max(1, num_pages)),
         "country": country,
         "language": language,
         "date_posted": date_posted,

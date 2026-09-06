@@ -59,8 +59,10 @@ def seed_default_variants(engine, profile_id: int, profile: dict) -> None:
     Es un fallback de arranque, no sustituye a la generacion asistida por IA.
     """
     extracted = profile.get("extracted_json") or {}
-    equivalent_roles = [r for r in (extracted.get("equivalent_roles") or []) if r]
-    role_family = [r for r in (profile.get("role_family") or []) if r]
+    equivalent_roles_raw = extracted.get("equivalent_roles")
+    role_family_raw = profile.get("role_family")
+    equivalent_roles = [r for r in equivalent_roles_raw if isinstance(r, str) and r.strip()] if isinstance(equivalent_roles_raw, list) else []
+    role_family = [r for r in role_family_raw if isinstance(r, str) and r.strip()] if isinstance(role_family_raw, list) else []
 
     seen = set()
     candidates = []
@@ -153,15 +155,21 @@ def generate_variants_via_llm(profile: dict) -> list[str]:
     Genera sugerencias de variantes de busqueda a partir del CV/formulario,
     usando el mismo modelo :free que la extraccion de CV. No toca la base de
     datos, solo devuelve la lista de strings sugeridos.
+
+    Robusto a desviaciones de formato del LLM: si 'variants' no es una lista
+    (ej. llega como string o numero), o contiene elementos que no son str,
+    se descartan en vez de propagar un TypeError o iterar caracteres sueltos.
     """
     model = os.environ.get("OPENROUTER_MODEL_EXTRACTION", "minimax/minimax-m2.7:free")
     prompt_template = VARIANTS_PROMPT_PATH.read_text(encoding="utf-8")
     prompt = prompt_template.format(
         profile_json=json.dumps(profile.get("extracted_json") or {}, ensure_ascii=False),
-        role_family=", ".join(profile.get("role_family") or []),
+        role_family=", ".join(r for r in (profile.get("role_family") or []) if isinstance(r, str)),
     )
     result = call_llm_json(model, prompt)
-    variants = result.get("variants") or []
+    variants = result.get("variants") if isinstance(result, dict) else None
+    if not isinstance(variants, list):
+        variants = []
     cleaned = [v.strip() for v in variants if isinstance(v, str) and v.strip()]
     return cleaned[:MAX_AI_VARIANTS]
 

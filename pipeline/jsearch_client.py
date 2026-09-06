@@ -16,6 +16,11 @@ Notas sobre /search-v2 (segun documentacion oficial de OpenWeb Ninja):
 - num_pages controla cuantas paginas agrega la API en una sola llamada
   (server-side). Empezar en 1 y subir solo tras verificar en el dashboard de
   RapidAPI si num_pages>1 consume mas de 1 credito por llamada.
+- La API es un agregador de terceros (Jobrapido, Bing Jobs, Jooble, etc.) y sus
+  campos no son 100% fiables en tipo ni encoding: normalize_job() sanea todo
+  texto (fuerza str, elimina surrogates sueltos/mojibake) y coacciona salarios
+  y booleanos de forma defensiva, para no propagar errores de formato aguas
+  abajo (embeddings, insert en Postgres).
 """
 import os
 import json
@@ -79,19 +84,59 @@ def search_jobs(
     return jobs
 
 
+def _clean_text(value):
+    """
+    Normaliza cualquier valor a un str seguro para DB/embeddings, o None si el
+    valor original era None (preserva nullability de campos opcionales).
+
+    Fuerza a str si la API devuelve un tipo inesperado (list, dict, numero) en
+    vez de propagar ese tipo aguas abajo, y elimina caracteres Unicode invalidos
+    (surrogates sueltos, mojibake) que a veces llegan en texto agregado desde
+    sitios externos (Jobrapido, Bing Jobs, Jooble...). Sin esto, tanto el
+    tokenizer de embeddings como la escritura UTF-8 en Postgres fallan con
+    errores dificiles de rastrear.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        value = str(value)
+    return value.encode("utf-8", errors="ignore").decode("utf-8")
+
+
+def _clean_int(value):
+    """Coacciona a int de forma segura (salarios); None si no es convertible."""
+    if value is None:
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _clean_bool(value) -> bool:
+    """Coacciona a bool de forma segura: la API a veces devuelve 'true'/'false' como
+    string en vez de bool nativo, y bool('false') seria True si no se maneja aqui."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes")
+    return bool(value)
+
+
 def normalize_job(raw: dict) -> dict:
-    publisher = (raw.get("job_publisher") or "").lower()
+    publisher = _clean_text(raw.get("job_publisher")) or ""
+    publisher = publisher.lower()
     source = "linkedin" if "linkedin" in publisher else ("indeed" if "indeed" in publisher else "other")
     return {
-        "external_id": raw.get("job_id"),
-        "title": raw.get("job_title") or "Sin titulo",
-        "company": raw.get("employer_name"),
-        "location": raw.get("job_city") or raw.get("job_country"),
-        "remote_type": "remote" if raw.get("job_is_remote") else "onsite",
-        "description": raw.get("job_description") or "",
-        "apply_link": raw.get("job_apply_link") or raw.get("job_google_link") or "",
+        "external_id": _clean_text(raw.get("job_id")),
+        "title": _clean_text(raw.get("job_title")) or "Sin titulo",
+        "company": _clean_text(raw.get("employer_name")),
+        "location": _clean_text(raw.get("job_city") or raw.get("job_country")),
+        "remote_type": "remote" if _clean_bool(raw.get("job_is_remote")) else "onsite",
+        "description": _clean_text(raw.get("job_description")) or "",
+        "apply_link": _clean_text(raw.get("job_apply_link") or raw.get("job_google_link")) or "",
         "source": source,
-        "salary_min": raw.get("job_min_salary"),
-        "salary_max": raw.get("job_max_salary"),
+        "salary_min": _clean_int(raw.get("job_min_salary")),
+        "salary_max": _clean_int(raw.get("job_max_salary")),
         "posted_at": raw.get("job_posted_at_datetime_utc"),
     }

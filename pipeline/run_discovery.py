@@ -100,20 +100,17 @@ def main():
         profile = load_profile(engine)
         if profile is None:
             errors.append("No hay perfil configurado (profile.id=1). Completa el onboarding primero.")
-            _log_run(engine, started_at, jsearch_calls, llm_calls, new_jobs_found, errors)
             return
 
         can_run, jsearch_used_month, llm_used_today = check_budget(engine)
         if not can_run:
             errors.append(f"Presupuesto JSearch agotado ({jsearch_used_month}/{JSEARCH_MONTHLY_BUDGET} este mes).")
-            _log_run(engine, started_at, jsearch_calls, llm_calls, new_jobs_found, errors)
             return
 
         try:
             variant = get_or_seed_variant(engine, 1, profile)
         except RuntimeError as e:
             errors.append(str(e))
-            _log_run(engine, started_at, jsearch_calls, llm_calls, new_jobs_found, errors)
             return
 
         query = variant["query_text"]

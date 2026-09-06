@@ -14,9 +14,25 @@ def _get_model():
     return SentenceTransformer(EMBEDDING_MODEL_NAME)
 
 
+def _sanitize_text(value) -> str:
+    """
+    Fuerza a str y elimina caracteres invalidos (surrogates sueltos, mojibake)
+    que a veces llegan en descripciones agregadas por JSearch desde sitios
+    externos. El tokenizer de sentence-transformers (backend en Rust) no da un
+    error de decodificacion claro ante esto, sino el mensaje criptico
+    'TextEncodeInput must be Union[TextInputSequence, Tuple[...]]'.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        value = str(value)
+    return value.encode("utf-8", errors="ignore").decode("utf-8")
+
+
 def embed_text(text: str) -> list[float]:
     model = _get_model()
-    vector = model.encode(text, normalize_embeddings=True)
+    cleaned = _sanitize_text(text)
+    vector = model.encode(cleaned, normalize_embeddings=True)
     return vector.tolist()
 
 

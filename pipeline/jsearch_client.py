@@ -7,6 +7,8 @@ Notas sobre /search-v2 (segun documentacion oficial de OpenWeb Ninja):
   no directamente en data['data'] como en la v1.
 - Para queries fuera de EE.UU. hay que combinar 'country' Y 'language'.
 - El filtro de solo remoto se llama 'work_from_home' (no 'remote_jobs_only').
+- date_posted='week' puede devolver 0 resultados para roles de nicho en ciudades
+  concretas (validado manualmente); por defecto se usa 'month' via JSEARCH_DATE_POSTED.
 """
 import os
 import json
@@ -15,11 +17,13 @@ import httpx
 JSEARCH_BASE_URL = "https://jsearch.p.rapidapi.com/search-v2"
 
 
-def search_jobs(query: str, location: str | None, remote_only: bool, date_posted: str = "week") -> list[dict]:
+def search_jobs(query: str, location: str | None, remote_only: bool, date_posted: str | None = None) -> list[dict]:
     api_key = os.environ["RAPIDAPI_KEY"]
     host = os.environ.get("RAPIDAPI_JSEARCH_HOST", "jsearch.p.rapidapi.com")
     country = os.environ.get("JSEARCH_COUNTRY", "es")
     language = os.environ.get("JSEARCH_LANGUAGE", "en")
+    if date_posted is None:
+        date_posted = os.environ.get("JSEARCH_DATE_POSTED", "month")
     headers = {"X-RapidAPI-Key": api_key, "X-RapidAPI-Host": host}
     params = {
         "query": f"{query} in {location}" if location else query,

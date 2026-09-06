@@ -82,6 +82,15 @@ def build_search_query(profile: dict) -> str:
     return query
 
 
+def safe_text(value) -> str:
+    """Fuerza cualquier valor a str no vacio, para evitar tipos inesperados en embed_text()."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        return str(value)
+    return value
+
+
 def main():
     engine = get_engine()
     started_at = datetime.now(timezone.utc)
@@ -127,7 +136,16 @@ def main():
                 if existing:
                     continue
 
-                job_embedding = embed_text(f"{job['title']} {job['description']}")
+                title_str = safe_text(job.get("title"))
+                description_str = safe_text(job.get("description"))
+                embed_input = f"{title_str} {description_str}".strip() or "oferta sin descripcion"
+
+                try:
+                    job_embedding = embed_text(embed_input)
+                except Exception as e:
+                    errors.append(f"Error generando embedding para job {job['external_id']}: {e}")
+                    continue
+
                 similarity = cosine_similarity(job_embedding, profile["embedding"])
 
                 result = conn.execute(

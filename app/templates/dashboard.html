@@ -33,6 +33,12 @@
   <form method="post" action="/dashboard/clear-jobs" style="display:inline;" onsubmit="return confirm('¿Seguro que quieres eliminar TODAS las ofertas guardadas? Esta accion no se puede deshacer. No afecta a tu perfil ni a tus variantes de busqueda, pero reinicia su historial para que el proximo ciclo del cron vuelva a traer todo desde cero.');">
     <button type="submit" style="background:#b91c1c;color:white;border:none;border-radius:4px;">Eliminar todas las ofertas</button>
   </form>
+  <p class="muted">
+    Solo se listan aqui ofertas que ya tienen un resumen del LLM (pros, contras y requisitos evaluados) y que cumplen razonablemente los requisitos del puesto.
+    {% if pending_llm_count and pending_llm_count > 0 %}
+      Hay <strong>{{ pending_llm_count }}</strong> oferta{{ 's' if pending_llm_count != 1 else '' }} nueva{{ 's' if pending_llm_count != 1 else '' }} en cola de evaluacion; apareceran aqui en cuanto el cron las procese (cada 4 horas, en tandas limitadas por el presupuesto diario del LLM).
+    {% endif %}
+  </p>
   <div class="filters">
     <a href="/dashboard?status=all" class="{{ 'active' if status == 'all' else '' }}">Todas</a>
     <a href="/dashboard?status=new" class="{{ 'active' if status == 'new' else '' }}">Nuevas</a>
@@ -83,7 +89,6 @@
           </td>
           <td>
             <a href="/dashboard/{{ job.id }}">{{ job.title }}</a>
-            {% if not job.llm_evaluated %} <em class="muted">(pendiente LLM)</em>{% endif %}
             {% if job.recommendation == 'skip' %} <span class="badge" style="background:#fee2e2;color:#b91c1c;">no cumple requisitos</span>{% endif %}
           </td>
           <td>{{ job.company }}</td>
@@ -105,7 +110,7 @@
       </tbody>
     </table>
   </div>
-  {% if not jobs %}<p class="muted">Todavia no hay ofertas. El cron las ira anadiendo cada 4 horas.</p>{% endif %}
+  {% if not jobs %}<p class="muted">Todavia no hay ofertas evaluadas. El cron las ira anadiendo y evaluando cada 4 horas.</p>{% endif %}
 </div>
 {% endif %}
 {% endblock %}

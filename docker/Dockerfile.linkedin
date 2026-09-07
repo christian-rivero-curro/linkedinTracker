@@ -1,0 +1,10 @@
+FROM mcr.microsoft.com/playwright/python:v1.47.0-jammy
+
+WORKDIR /app
+
+COPY requirements-linkedin.txt .
+RUN pip install --no-cache-dir -r requirements-linkedin.txt
+
+COPY . .
+
+CMD ["python", "pipeline/run_linkedin_scrape.py"]

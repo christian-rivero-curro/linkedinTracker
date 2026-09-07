@@ -1,37 +1,36 @@
 """
-Entrypoint del cron de DESCUBRIMIENTO (GitHub Actions, cada 4h).
+Entrypoint del cron de DESCUBRIMIENTO via JSearch (GitHub Actions, cada 4h).
 Solo busca ofertas en JSearch y las guarda en la base de datos con su
-similitud vectorial. La evaluacion cualitativa por LLM vive en un script
-aparte (pipeline/run_llm_evaluation.py), que corre cada 5 minutos de forma
+similitud vectorial. La logica de insercion (dedup, filtros, embedding) esta
+centralizada en pipeline/job_ingest.py, compartida con pipeline/run_linkedin_scrape.py
+(el scraper de LinkedIn, pensado para correr en local/Docker, no aqui).
+
+La evaluacion cualitativa por LLM vive en un script aparte
+(pipeline/run_llm_evaluation.py), que corre cada 5 minutos de forma
 independiente: JSearch tiene una cuota mensual real y limitada, por lo que
 ese descubrimiento debe seguir siendo espaciado; el LLM usado es un modelo
 :free de OpenRouter sin limite diario real en la cuenta actual, asi que no
-tiene sentido atarlo a la misma cadencia de 4h - conviene evaluar el backlog
-lo antes posible.
+tiene sentido atarlo a la misma cadencia de 4h.
 
 Cada ejecucion consulta TODAS las variantes de busqueda activas (no una sola
 por rotacion), y por cada variante pagina hasta JSEARCH_MAX_PAGES_PER_VARIANT
 paginas o hasta que los resultados dejen de aportar ofertas mas recientes que
-el cutoff de esa variante - lo que ocurra antes. Esto es deliberadamente mas
-costoso en cuota de JSearch que una unica llamada por ejecucion, a cambio de
-un barrido mas exhaustivo del perfil. Hay un corte de seguridad por
+el cutoff de esa variante - lo que ocurra antes. Hay un corte de seguridad por
 presupuesto mensual que impide superar JSEARCH_MONTHLY_BUDGET.
 
 El cutoff por variante es un filtro RELATIVO (anti-solapamiento entre
 ejecuciones sucesivas de la misma variante): en la primera ejecucion de una
 variante (cutoff=None) no descarta nada por fecha. Como JSearch agrega
-fuentes de terceros con metadata de fecha poco fiable (date_posted='month' no
-es una garantia dura), se aplica ademas JSEARCH_MAX_JOB_AGE_DAYS como techo
-ABSOLUTO de antiguedad, independiente del cutoff.
+fuentes de terceros con metadata de fecha poco fiable, se aplica ademas
+JSEARCH_MAX_JOB_AGE_DAYS como techo ABSOLUTO de antiguedad (en job_ingest.py).
 
 Solo se guardan ofertas cuyo publisher se clasifique como LinkedIn
-(REQUIRED_SOURCE). jsearch_client.py ya pide "via linkedin" en la query, pero
-eso no es una garantia estricta de la API - este es el filtro de seguridad
-que realmente asegura que solo entren ofertas de LinkedIn a la base de datos.
+(JSEARCH_SOURCE_FILTER, por defecto 'linkedin'). jsearch_client.py ya pide
+"via linkedin" en la query, pero eso no es una garantia estricta de la API -
+el filtro real que asegura esto es allowed_sources en job_ingest.py.
 
 Fail-soft: nunca debe terminar con excepcion no controlada, incluida la
-lectura de configuracion (variables de entorno mal escritas usan su default
-en vez de tumbar el modulo entero al importarlo).
+lectura de configuracion.
 """
 import os
 import sys
@@ -47,18 +46,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.db import get_engine  # noqa: E402
 from pipeline.jsearch_client import search_jobs, normalize_job  # noqa: E402
-from pipeline.embeddings import embed_text, cosine_similarity, to_pgvector_literal, parse_pgvector  # noqa: E402
-from pipeline.scoring import is_blacklisted  # noqa: E402
+from pipeline.embeddings import parse_pgvector  # noqa: E402
+from pipeline.job_ingest import process_and_store_job  # noqa: E402
 from pipeline.query_variants import get_or_seed_variants, mark_variant_run  # noqa: E402
 
 
 def _int_env(name: str, default: int) -> int:
-    """
-    Lee una variable de entorno como int de forma segura. Si falta, esta vacia
-    o no es convertible, devuelve el default sin lanzar excepcion - un typo en
-    la configuracion (ej. JSEARCH_MAX_PAGES_PER_VARIANT='3,') no debe tumbar
-    todo el cron a nivel de import, antes incluso de llegar a main().
-    """
     raw = os.environ.get(name)
     if raw is None or not str(raw).strip():
         return default
@@ -69,15 +62,9 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
-def _str_env(name: str, default: str) -> str:
-    value = os.environ.get(name, "").strip()
-    return value if value else default
-
-
 JSEARCH_MONTHLY_BUDGET = _int_env("JSEARCH_MONTHLY_BUDGET", 180)
 MAX_PAGES_PER_VARIANT = max(1, _int_env("JSEARCH_MAX_PAGES_PER_VARIANT", 3))
 JSEARCH_PAGE_SIZE_HINT = 10  # heuristica: una pagina con menos resultados que esto se asume la ultima
-MAX_JOB_AGE_DAYS = max(1, _int_env("JSEARCH_MAX_JOB_AGE_DAYS", 35))
 # Debe coincidir con JSEARCH_SOURCE_FILTER de jsearch_client.py. Vacio = sin filtro (acepta cualquier fuente).
 REQUIRED_SOURCE = os.environ.get("JSEARCH_SOURCE_FILTER", "linkedin").strip().lower()
 
@@ -103,124 +90,10 @@ def load_profile(engine) -> dict | None:
     return profile
 
 
-def safe_text(value) -> str:
-    """Fuerza cualquier valor a str no vacio, para evitar tipos inesperados en embed_text()."""
-    if value is None:
-        return ""
-    if not isinstance(value, str):
-        return str(value)
-    return value
-
-
-def parse_posted_at(value):
-    """Parseo defensivo del timestamp de publicacion de una oferta. Nunca lanza:
-    si no se puede interpretar, devuelve None (y esa oferta no se filtra por cutoff,
-    se procesa igualmente para no perder posibles matches por un formato inesperado).
-    """
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    try:
-        text_value = str(value).strip()
-        if text_value.endswith("Z"):
-            text_value = text_value[:-1] + "+00:00"
-        parsed = datetime.fromisoformat(text_value)
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-    except (ValueError, TypeError):
-        return None
-
-
 def _process_job(conn, raw, profile, cutoff, errors, variant_id) -> tuple[bool, object, bool]:
-    """
-    Procesa una oferta cruda de JSearch dentro de la transaccion `conn`.
-    Devuelve (es_fresca, posted_at, fue_insertada):
-      - es_fresca: si cae dentro de la ventana temporal de la variante (para
-        decidir si seguir paginando).
-      - posted_at: timestamp parseado (o None), para actualizar el cutoff.
-      - fue_insertada: True solo si se inserto una fila nueva en job_offer.
-    No lanza excepciones de negocio: los fallos puntuales (embedding, etc.)
-    se registran en `errors` y la oferta se salta sin insertar.
-
-    Aplica varios filtros antes de insertar:
-    1. Techo absoluto (MAX_JOB_AGE_DAYS): descarta ofertas demasiado viejas
-       SIEMPRE, incluso en la primera ejecucion de una variante (cutoff=None).
-       Necesario porque el date_posted='month' de la API no es una garantia
-       dura (metadata de fecha poco fiable en fuentes agregadas).
-    2. Cutoff relativo por variante: evita reprocesar lo ya visto entre
-       ejecuciones sucesivas de la MISMA variante.
-    3. REQUIRED_SOURCE: si esta configurado (por defecto 'linkedin'), descarta
-       cualquier oferta cuyo publisher no se haya clasificado como esa fuente.
-       Esta oferta SI cuenta como "vista"/fresca a efectos de paginacion y
-       cutoff, para no reintentar buscarla en cada ejecucion.
-
-    variant_id se guarda en job_offer para saber que variante encontro la oferta
-    (visible y filtrable en el dashboard, y usado por run_llm_evaluation.py
-    para el reparto de la evaluacion LLM).
-    """
     job = normalize_job(raw)
-    if not job["external_id"] or not job["apply_link"]:
-        return False, None, False
-
-    posted_at = parse_posted_at(job.get("posted_at"))
-
-    if posted_at is not None:
-        max_age_threshold = datetime.now(timezone.utc) - timedelta(days=MAX_JOB_AGE_DAYS)
-        if posted_at < max_age_threshold:
-            return False, posted_at, False
-
-    is_fresh = cutoff is None or posted_at is None or posted_at > cutoff
-    if not is_fresh:
-        return False, posted_at, False
-
-    if REQUIRED_SOURCE and job["source"] != REQUIRED_SOURCE:
-        return True, posted_at, False
-
-    if is_blacklisted(job["title"]) and not any(
-        kw in job["title"].lower() for kw in profile.get("role_family", [])
-    ):
-        return True, posted_at, False
-
-    existing = conn.execute(
-        text("SELECT id FROM job_offer WHERE external_id = :eid"),
-        {"eid": job["external_id"]},
-    ).first()
-    if existing:
-        return True, posted_at, False
-
-    title_str = safe_text(job.get("title"))
-    description_str = safe_text(job.get("description"))
-    embed_input = f"{title_str} {description_str}".strip() or "oferta sin descripcion"
-
-    try:
-        job_embedding = embed_text(embed_input)
-    except Exception as e:
-        errors.append(f"Error generando embedding para job {job['external_id']}: {e}")
-        return True, posted_at, False
-
-    similarity = cosine_similarity(job_embedding, profile["embedding"])
-
-    result = conn.execute(
-        text("""
-            INSERT INTO job_offer (external_id, title, company, location, remote_type,
-                description, apply_link, source, salary_min, salary_max, posted_at, embedding, variant_id)
-            VALUES (:external_id, :title, :company, :location, :remote_type,
-                :description, :apply_link, :source, :salary_min, :salary_max, :posted_at, CAST(:embedding AS vector), :variant_id)
-            RETURNING id
-        """),
-        {**job, "embedding": to_pgvector_literal(job_embedding), "variant_id": variant_id},
-    )
-    job_offer_id = result.scalar()
-
-    conn.execute(
-        text("""
-            INSERT INTO job_score (job_offer_id, profile_id, vector_similarity, llm_evaluated, final_score)
-            VALUES (:job_offer_id, 1, :similarity, FALSE, :final_score)
-            ON CONFLICT (job_offer_id, profile_id) DO NOTHING
-        """),
-        {"job_offer_id": job_offer_id, "similarity": similarity, "final_score": similarity * 100},
-    )
-    return True, posted_at, True
+    allowed_sources = [REQUIRED_SOURCE] if REQUIRED_SOURCE else None
+    return process_and_store_job(conn, job, profile, cutoff, errors, variant_id, allowed_sources=allowed_sources)
 
 
 def main():

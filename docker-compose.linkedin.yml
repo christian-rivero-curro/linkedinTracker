@@ -1,0 +1,15 @@
+services:
+  linkedin-scraper:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.linkedin
+    env_file:
+      - .env
+    environment:
+      LINKEDIN_HEADLESS: "true"
+      LINKEDIN_STORAGE_STATE: /app/linkedin_session/storage_state.json
+      LINKEDIN_HOURS_AGO: "4"
+      LINKEDIN_MAX_JOBS_PER_VARIANT: "25"
+    volumes:
+      - ./linkedin_session:/app/linkedin_session:ro
+    command: ["python", "pipeline/run_linkedin_scrape.py"]

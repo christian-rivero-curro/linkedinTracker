@@ -17,6 +17,13 @@ fuentes de terceros con metadata de fecha poco fiable (date_posted='month' no
 es una garantia dura), se aplica ademas JSEARCH_MAX_JOB_AGE_DAYS como techo
 ABSOLUTO de antiguedad, independiente del cutoff.
 
+Evaluacion LLM por variante (no un ranking global unico): cada variante de
+busqueda obtiene su propio cupo de hasta LLM_TOP_N_PER_VARIANT candidatas
+(las de mayor similitud vectorial pendientes de evaluar), y las candidatas de
+todas las variantes se recorren en round-robin. Esto evita que una variante
+muy productiva monopolice todo el LLM_DAILY_BUDGET a costa de dejar sin
+evaluar ofertas de otras variantes mas nicho pero igual de relevantes.
+
 Fail-soft: nunca debe terminar con excepcion no controlada, incluida la
 lectura de configuracion (variables de entorno mal escritas usan su default
 en vez de tumbar el modulo entero al importarlo).
@@ -24,6 +31,7 @@ en vez de tumbar el modulo entero al importarlo).
 import os
 import sys
 import traceback
+from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
@@ -64,7 +72,7 @@ def _int_env(name: str, default: int) -> int:
 
 JSEARCH_MONTHLY_BUDGET = _int_env("JSEARCH_MONTHLY_BUDGET", 180)
 LLM_DAILY_BUDGET = _int_env("LLM_DAILY_BUDGET", 48)
-TOP_N_FOR_LLM = 8
+LLM_TOP_N_PER_VARIANT = max(1, _int_env("LLM_TOP_N_PER_VARIANT", 10))
 VECTOR_SIMILARITY_THRESHOLD = 0.55
 MAX_PAGES_PER_VARIANT = max(1, _int_env("JSEARCH_MAX_PAGES_PER_VARIANT", 3))
 JSEARCH_PAGE_SIZE_HINT = 10  # heuristica: una pagina con menos resultados que esto se asume la ultima
@@ -145,7 +153,8 @@ def _process_job(conn, raw, profile, cutoff, errors, variant_id) -> tuple[bool, 
        ejecuciones sucesivas de la MISMA variante.
 
     variant_id se guarda en job_offer para saber que variante encontro la oferta
-    (visible y filtrable en el dashboard).
+    (visible y filtrable en el dashboard, y usado luego para repartir el cupo
+    de evaluacion LLM de forma independiente por variante).
     """
     job = normalize_job(raw)
     if not job["external_id"] or not job["apply_link"]:
@@ -207,6 +216,45 @@ def _process_job(conn, raw, profile, cutoff, errors, variant_id) -> tuple[bool, 
         {"job_offer_id": job_offer_id, "similarity": similarity, "final_score": similarity * 100},
     )
     return True, posted_at, True
+
+
+def _fetch_pending_for_llm_round_robin(conn):
+    """
+    Selecciona candidatas pendientes de evaluar por LLM, con hasta
+    LLM_TOP_N_PER_VARIANT por variante (ranking independiente por variante via
+    ROW_NUMBER), y las devuelve intercaladas en round-robin entre variantes
+    (primera candidata de cada variante, luego la segunda de cada una, etc.).
+
+    Esto asegura que, si el LLM_DAILY_BUDGET no alcanza para evaluar todo el
+    cupo, el recorte afecte por igual a todas las variantes activas en vez de
+    agotarse siempre en la primera variante de la lista.
+    """
+    ranked = conn.execute(
+        text("""
+            SELECT * FROM (
+                SELECT js.id AS score_id, js.job_offer_id, js.vector_similarity, jo.*,
+                       ROW_NUMBER() OVER (PARTITION BY jo.variant_id ORDER BY js.vector_similarity DESC) AS rn
+                FROM job_score js
+                JOIN job_offer jo ON jo.id = js.job_offer_id
+                WHERE js.llm_evaluated = FALSE AND js.vector_similarity >= :threshold
+            ) ranked
+            WHERE rn <= :limit
+            ORDER BY ranked.variant_id NULLS LAST, rn
+        """),
+        {"threshold": VECTOR_SIMILARITY_THRESHOLD, "limit": LLM_TOP_N_PER_VARIANT},
+    ).mappings().all()
+
+    grouped = defaultdict(deque)
+    for row in ranked:
+        grouped[row["variant_id"]].append(row)
+
+    interleaved = []
+    while grouped:
+        for vid in list(grouped.keys()):
+            interleaved.append(grouped[vid].popleft())
+            if not grouped[vid]:
+                del grouped[vid]
+    return interleaved
 
 
 def main():
@@ -305,20 +353,14 @@ def main():
                     errors.append(f"Error actualizando cutoff de variante {variant.get('id')}: {e}")
 
         with engine.begin() as conn:
-            pending = conn.execute(
-                text("""
-                    SELECT js.id AS score_id, js.job_offer_id, js.vector_similarity, jo.*
-                    FROM job_score js
-                    JOIN job_offer jo ON jo.id = js.job_offer_id
-                    WHERE js.llm_evaluated = FALSE AND js.vector_similarity >= :threshold
-                    ORDER BY js.vector_similarity DESC
-                    LIMIT :limit
-                """),
-                {"threshold": VECTOR_SIMILARITY_THRESHOLD, "limit": TOP_N_FOR_LLM},
-            ).mappings().all()
+            pending = _fetch_pending_for_llm_round_robin(conn)
 
             for row in pending:
                 if llm_used_today + llm_calls >= LLM_DAILY_BUDGET:
+                    errors.append(
+                        f"Presupuesto LLM diario agotado tras {llm_calls} llamadas en esta ejecucion; "
+                        f"quedan {len(pending) - pending.index(row)} candidatas pendientes para la proxima ejecucion."
+                    )
                     break
                 try:
                     evaluation = evaluate_job_with_llm(profile["extracted_json"], dict(row))

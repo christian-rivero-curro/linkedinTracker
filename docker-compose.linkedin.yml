@@ -10,6 +10,7 @@ services:
       LINKEDIN_STORAGE_STATE: /app/linkedin_session/storage_state.json
       LINKEDIN_HOURS_AGO: "4"
       LINKEDIN_MAX_JOBS_PER_VARIANT: "25"
+    shm_size: "2gb"
     volumes:
       - ./linkedin_session:/app/linkedin_session:ro
     command: ["python", "pipeline/run_linkedin_scrape.py"]

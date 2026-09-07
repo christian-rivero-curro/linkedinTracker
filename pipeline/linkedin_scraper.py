@@ -12,6 +12,12 @@ Disenado para minimizar senales de bot:
 - Delays aleatorios entre acciones (no fijos, para no ser un patron detectable).
 - Se detiene INMEDIATAMENTE (LinkedInBlockedError) si detecta un checkpoint,
   authwall o redireccion a login - nunca reintenta en bucle sobre un bloqueo.
+
+Nota Docker: Chromium necesita memoria compartida (/dev/shm) suficiente; el
+default de Docker (64MB) suele quedarse corto y el renderer se cuelga sin dar
+error claro (page.goto revienta en timeout). Por eso se lanza siempre con
+--disable-dev-shm-usage (usa /tmp en su lugar), ademas de ampliar shm_size en
+docker-compose.linkedin.yml como margen extra.
 """
 import os
 import random
@@ -32,6 +38,14 @@ COMPANY_SELECTOR = ".artdeco-entity-lockup__subtitle, .job-card-container__compa
 METADATA_SELECTOR = ".job-card-container__metadata-item, .artdeco-entity-lockup__caption"
 DESCRIPTION_SELECTOR = "#job-details, .jobs-description__content, .jobs-box__html-content"
 RESULTS_LIST_SELECTOR = "div.jobs-search-results-list, ul.jobs-search__results-list"
+
+NAVIGATION_TIMEOUT_MS = 60000
+
+CHROMIUM_LAUNCH_ARGS = [
+    "--disable-dev-shm-usage",
+    "--disable-blink-features=AutomationControlled",
+    "--no-sandbox",
+]
 
 
 class LinkedInBlockedError(Exception):
@@ -95,11 +109,13 @@ def _detect_remote_type(metadata_text: str | None) -> str | None:
 
 
 def new_browser_context(playwright, headless: bool = True):
-    browser = playwright.chromium.launch(headless=headless)
+    browser = playwright.chromium.launch(headless=headless, args=CHROMIUM_LAUNCH_ARGS)
     context_kwargs = {"viewport": {"width": 1366, "height": 900}}
     if os.path.exists(STORAGE_STATE_PATH):
         context_kwargs["storage_state"] = STORAGE_STATE_PATH
     context = browser.new_context(**context_kwargs)
+    context.set_default_navigation_timeout(NAVIGATION_TIMEOUT_MS)
+    context.set_default_timeout(NAVIGATION_TIMEOUT_MS)
     return browser, context
 
 
@@ -109,7 +125,10 @@ def scrape_variant(page, query_text: str, location: str | None, remote_preferenc
     dicts en el formato normalizado que espera pipeline/job_ingest.py.
     """
     url = build_search_url(query_text, location, remote_preference, hours_ago)
-    page.goto(url, wait_until="domcontentloaded", timeout=30000)
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
+    except PlaywrightTimeoutError:
+        raise TimeoutError(f"Timeout navegando a LinkedIn. Ultima URL alcanzada: {page.url}")
     _random_delay(2, 4)
     _check_blocked(page)
 

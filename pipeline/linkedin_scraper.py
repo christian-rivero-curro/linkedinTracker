@@ -6,16 +6,27 @@ a fecha de escritura de este modulo. LinkedIn cambia su HTML con cierta
 frecuencia; si scrape_variant() deja de encontrar tarjetas o descripcion, este
 es el primer sitio a revisar.
 
-Diagnostico reforzado: si la navegacion falla o se queda a medias (p.ej.
-atascada en la pantalla de carga inicial de LinkedIn, 'app-loader'), se
-guarda:
+Timeouts por fase (en vez de un unico timeout generico reutilizado en todas
+las fases, que mezclaba presupuestos de tiempo muy distintos):
+  - COMMIT_TIMEOUT_MS: la respuesta HTTP inicial. Casi nunca tarda; si tarda
+    esto, es un problema de red/DNS, no de LinkedIn tardando en renderizar.
+  - DOMCONTENTLOADED_TIMEOUT_MS: que el HTML basico este listo.
+  - RESULTS_SELECTOR_TIMEOUT_MS: que la app JS haya hidratado y pintado la
+    lista de resultados.
+
+Circuit breaker: si domcontentloaded no se alcanza a tiempo Y ademas no
+aparece la lista de resultados, es una senal fuerte de que la app de LinkedIn
+se quedo colgada en su pantalla de carga (sesion invalida/bloqueada) - no un
+'0 resultados' legitimo. scrape_variant() lo distingue lanzando
+LinkedInAppNotLoadedError en vez de devolver una lista vacia silenciosamente,
+para que run_linkedin_scrape.py pueda cortar la ejecucion tras N fallos
+seguidos en vez de repetir el mismo fallo lento en las 5 variantes.
+
+Diagnostico: si la navegacion falla o se queda a medias, se guarda:
   - screenshot + titulo + HTML parcial (_save_diagnostics)
   - errores de consola JS del navegador
   - peticiones de red que fallaron
-  - respuestas HTTP 401/403 de la API interna de LinkedIn (Voyager), que
-    suelen ser la causa real de que la app se quede colgada en el loader sin
-    redirigir a login (sesion invalida/bloqueada mientras el shell HTML si
-    carga bien).
+  - respuestas HTTP 401/403 de la API interna de LinkedIn (Voyager)
 Todo esto se guarda en LINKEDIN_DIAGNOSTICS_DIR (por defecto
 linkedin_diagnostics/, montado como volumen de lectura-escritura en
 docker-compose.linkedin.yml).
@@ -54,7 +65,13 @@ METADATA_SELECTOR = ".job-card-container__metadata-item, .artdeco-entity-lockup_
 DESCRIPTION_SELECTOR = "#job-details, .jobs-description__content, .jobs-box__html-content"
 RESULTS_LIST_SELECTOR = "div.jobs-search-results-list, ul.jobs-search__results-list"
 
-NAVIGATION_TIMEOUT_MS = 60000
+# Timeout general del contexto/acciones (clicks, selectors sueltos, etc.)
+DEFAULT_ACTION_TIMEOUT_MS = 60000
+# Timeouts especificos por fase de la navegacion (ver docstring del modulo)
+COMMIT_TIMEOUT_MS = 20000
+DOMCONTENTLOADED_TIMEOUT_MS = 45000
+RESULTS_SELECTOR_TIMEOUT_MS = 15000
+DESCRIPTION_TIMEOUT_MS = 8000
 
 CHROMIUM_LAUNCH_ARGS = [
     "--disable-dev-shm-usage",
@@ -65,6 +82,19 @@ CHROMIUM_LAUNCH_ARGS = [
 
 class LinkedInBlockedError(Exception):
     """LinkedIn ha mostrado un checkpoint/authwall/login; hay que parar y NO reintentar en bucle."""
+
+
+class LinkedInAppNotLoadedError(Exception):
+    """
+    La app de LinkedIn se quedo colgada en su pantalla de carga inicial: no se
+    alcanzo domcontentloaded a tiempo Y tampoco aparecio la lista de
+    resultados. A diferencia de un '0 resultados' legitimo (donde
+    domcontentloaded si se alcanza y la app simplemente no tiene nada que
+    mostrar), esto es una senal fuerte de sesion invalida/bloqueada - no debe
+    tratarse como '0 ofertas para esta variante' sino como un fallo sistemico
+    que justifica cortar la ejecucion (ver circuit breaker en
+    run_linkedin_scrape.py).
+    """
 
 
 def _log(message: str):
@@ -86,9 +116,7 @@ def attach_diagnostics_listeners(page) -> dict:
     Engancha listeners a la pestana para capturar, en vivo, todo lo que puede
     explicar por que la app de LinkedIn se queda congelada en su pantalla de
     carga inicial ('app-loader'): errores de JS en consola, peticiones de red
-    fallidas, y respuestas 401/403 de la API interna (Voyager) - la causa mas
-    probable de que el shell HTML cargue pero la app nunca llegue a hidratarse
-    ni a redirigir a login.
+    fallidas, y respuestas 401/403 de la API interna (Voyager).
 
     Devuelve un dict de listas que se van rellenando via closures; pasar este
     dict a scrape_variant()/_save_diagnostics() para volcarlo en los logs.
@@ -218,8 +246,8 @@ def new_browser_context(playwright, headless: bool = True):
     else:
         _log(f"AVISO: no existe {STORAGE_STATE_PATH}; se navegara SIN sesion (LinkedIn redirigira a login).")
     context = browser.new_context(**context_kwargs)
-    context.set_default_navigation_timeout(NAVIGATION_TIMEOUT_MS)
-    context.set_default_timeout(NAVIGATION_TIMEOUT_MS)
+    context.set_default_navigation_timeout(DEFAULT_ACTION_TIMEOUT_MS)
+    context.set_default_timeout(DEFAULT_ACTION_TIMEOUT_MS)
     return browser, context
 
 
@@ -228,24 +256,27 @@ def scrape_variant(page, query_text: str, location: str | None, remote_preferenc
     Navega a la busqueda de LinkedIn para esta variante y devuelve una lista de
     dicts en el formato normalizado que espera pipeline/job_ingest.py.
 
-    'diag_state', si se pasa (ver attach_diagnostics_listeners), se vuelca en
-    cada punto de fallo para saber si la app se quedo colgada por un 401/403
-    de la API interna, por un error de JS, o por peticiones de red fallidas.
+    Lanza LinkedInAppNotLoadedError (en vez de devolver [] silenciosamente) si
+    domcontentloaded no se alcanzo a tiempo Y tampoco aparecio la lista de
+    resultados - senal fuerte de app colgada en el loader, distinta de un '0
+    resultados' legitimo donde domcontentloaded si se completa.
     """
     url = build_search_url(query_text, location, remote_preference, hours_ago)
     _log(f"URL de busqueda: {url}")
 
     try:
-        page.goto(url, wait_until="commit", timeout=NAVIGATION_TIMEOUT_MS)
+        page.goto(url, wait_until="commit", timeout=COMMIT_TIMEOUT_MS)
     except PlaywrightTimeoutError:
         _save_diagnostics(page, query_text, diag_state)
-        raise TimeoutError(f"Timeout esperando 'commit' de la navegacion. Ultima URL alcanzada: {page.url}")
+        raise TimeoutError(f"Timeout esperando 'commit' de la navegacion (>{COMMIT_TIMEOUT_MS}ms). Posible problema de red/DNS. Ultima URL alcanzada: {page.url}")
     _log(f"Commit recibido. URL tras el commit: {page.url}")
 
+    dom_content_loaded_ok = True
     try:
-        page.wait_for_load_state("domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
+        page.wait_for_load_state("domcontentloaded", timeout=DOMCONTENTLOADED_TIMEOUT_MS)
         _log("domcontentloaded alcanzado correctamente.")
     except PlaywrightTimeoutError:
+        dom_content_loaded_ok = False
         _save_diagnostics(page, query_text, diag_state)
         _log("AVISO: domcontentloaded no se alcanzo a tiempo; se continua igualmente con el DOM parcial disponible.")
 
@@ -253,15 +284,20 @@ def scrape_variant(page, query_text: str, location: str | None, remote_preferenc
     _check_blocked(page)
 
     try:
-        page.wait_for_selector(RESULTS_LIST_SELECTOR, timeout=15000)
+        page.wait_for_selector(RESULTS_LIST_SELECTOR, timeout=RESULTS_SELECTOR_TIMEOUT_MS)
         _log("Lista de resultados encontrada en el DOM.")
     except PlaywrightTimeoutError:
         _check_blocked(page)
         _save_diagnostics(page, query_text, diag_state)
+        if not dom_content_loaded_ok:
+            raise LinkedInAppNotLoadedError(
+                "La app de LinkedIn no llego a hidratarse: domcontentloaded fallo y tampoco aparecio "
+                "la lista de resultados. Probable sesion invalida/bloqueada, no una busqueda sin resultados."
+            )
         _log(
             "AVISO: no se encontro el contenedor de resultados "
             f"(selector actual: '{RESULTS_LIST_SELECTOR}'). Puede que LinkedIn haya cambiado el HTML, "
-            "que haya un challenge de verificacion, o que la busqueda no tenga resultados. 0 ofertas para esta variante."
+            "o que la busqueda no tenga resultados. 0 ofertas para esta variante."
         )
         return []
 
@@ -298,7 +334,7 @@ def scrape_variant(page, query_text: str, location: str | None, remote_preferenc
                     title_el.click()
                     _random_delay(1.5, 3.5)
                     _check_blocked(page)
-                    desc_el = page.wait_for_selector(DESCRIPTION_SELECTOR, timeout=8000)
+                    desc_el = page.wait_for_selector(DESCRIPTION_SELECTOR, timeout=DESCRIPTION_TIMEOUT_MS)
                     description = desc_el.inner_text().strip()
             except PlaywrightTimeoutError:
                 _log(f"AVISO: no se pudo cargar la descripcion de '{title}' (selector '{DESCRIPTION_SELECTOR}' no encontrado a tiempo).")

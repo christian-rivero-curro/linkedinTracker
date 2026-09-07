@@ -6,14 +6,23 @@ Requiere haber ejecutado antes pipeline/linkedin_login.py una vez para generar
 la sesion guardada (ver LINKEDIN_STORAGE_STATE).
 
 Cada variante usa una PESTANA NUEVA (context.new_page()), con listeners de
-diagnostico enganchados (attach_diagnostics_listeners) para capturar errores
-de consola JS, peticiones de red fallidas y respuestas 401/403 de la API
-interna de LinkedIn - la causa mas probable de que la app se quede colgada en
-su pantalla de carga sin llegar a mostrar resultados ni redirigir a login.
+diagnostico enganchados (attach_diagnostics_listeners).
 
-Reutiliza pipeline/job_ingest.py (verbose=True, para ver el motivo exacto de
-cada oferta descartada) - mismo pipeline de scoring vectorial + evaluacion LLM
-que run_discovery.py.
+Circuit breaker: si MAX_CONSECUTIVE_APP_LOAD_FAILURES variantes consecutivas
+fallan con LinkedInAppNotLoadedError (app colgada en el loader - sesion
+probablemente invalida/bloqueada), se aborta el resto de variantes en vez de
+repetir el mismo fallo lento 5 veces (desperdicia minutos y aumenta senales de
+bot: varias sesiones colgandose igual es peor que una).
+
+Cada job se procesa dentro de un SAVEPOINT (conn.begin_nested()) en vez de
+compartir la transaccion completa de la variante: si un job individual falla
+(p.ej. error puntual generando su embedding), solo se revierte ese job - sin
+esto, un fallo en un job dejaba la transaccion de Postgres 'abortada' y todos
+los jobs siguientes de esa variante fallaban en cascada con
+'current transaction is aborted', aunque fueran validos.
+
+Reutiliza pipeline/job_ingest.py (verbose=True) - mismo pipeline de scoring
+vectorial + evaluacion LLM que run_discovery.py.
 
 Fail-soft con una excepcion deliberada: si LinkedIn devuelve un
 checkpoint/bloqueo, el script para INMEDIATAMENTE sin reintentar.
@@ -36,7 +45,15 @@ from app.db import get_engine  # noqa: E402
 from pipeline.embeddings import parse_pgvector  # noqa: E402
 from pipeline.job_ingest import process_and_store_job  # noqa: E402
 from pipeline.query_variants import get_all_variants  # noqa: E402
-from pipeline.linkedin_scraper import scrape_variant, new_browser_context, attach_diagnostics_listeners, LinkedInBlockedError  # noqa: E402
+from pipeline.linkedin_scraper import (  # noqa: E402
+    scrape_variant,
+    new_browser_context,
+    attach_diagnostics_listeners,
+    LinkedInBlockedError,
+    LinkedInAppNotLoadedError,
+)
+
+MAX_CONSECUTIVE_APP_LOAD_FAILURES = 2
 
 
 def _int_env(name: str, default: int) -> int:
@@ -66,13 +83,15 @@ def load_profile(engine) -> dict | None:
 
 
 def main():
-    engine = get_engine()
     started_at = datetime.now(timezone.utc)
     new_jobs_found = 0
     errors = []
     blocked = False
+    engine = None
 
     try:
+        engine = get_engine()
+
         profile = load_profile(engine)
         if profile is None:
             errors.append("No hay perfil configurado (profile.id=1). Completa el onboarding primero.")
@@ -90,6 +109,8 @@ def main():
         with sync_playwright() as p:
             browser, context = new_browser_context(p, headless=LINKEDIN_HEADLESS)
 
+            consecutive_app_load_failures = 0
+
             for variant in variants:
                 if blocked:
                     break
@@ -106,11 +127,26 @@ def main():
                         max_jobs=LINKEDIN_MAX_JOBS_PER_VARIANT,
                         diag_state=diag_state,
                     )
+                    consecutive_app_load_failures = 0
                 except LinkedInBlockedError as e:
                     errors.append(f"BLOQUEO de LinkedIn detectado, abortando ejecucion sin reintentar: {e}")
                     blocked = True
                     page.close()
                     break
+                except LinkedInAppNotLoadedError as e:
+                    consecutive_app_load_failures += 1
+                    errors.append(f"App de LinkedIn no cargo para variante '{variant['query_text']}' ({consecutive_app_load_failures}/{MAX_CONSECUTIVE_APP_LOAD_FAILURES} fallos consecutivos): {e}")
+                    print(f"  ERROR: {e}")
+                    page.close()
+                    if consecutive_app_load_failures >= MAX_CONSECUTIVE_APP_LOAD_FAILURES:
+                        errors.append(
+                            f"CIRCUIT BREAKER: {consecutive_app_load_failures} fallos de carga consecutivos. "
+                            "Abortando el resto de variantes en vez de repetir el mismo fallo sistemico "
+                            "(revisa la sesion guardada en linkedin_session/storage_state.json)."
+                        )
+                        blocked = True
+                        break
+                    continue
                 except Exception as e:
                     errors.append(f"Error scrapeando variante '{variant['query_text']}': {e}")
                     print(f"  ERROR: {e}")
@@ -124,9 +160,10 @@ def main():
                 with engine.begin() as conn:
                     for job in raw_jobs:
                         try:
-                            _, _, was_inserted = process_and_store_job(
-                                conn, job, profile, cutoff=None, errors=errors, variant_id=variant["id"], verbose=True
-                            )
+                            with conn.begin_nested():
+                                _, _, was_inserted = process_and_store_job(
+                                    conn, job, profile, cutoff=None, errors=errors, variant_id=variant["id"], verbose=True
+                                )
                             if was_inserted:
                                 new_jobs_found += 1
                                 inserted_this_variant += 1
@@ -143,7 +180,10 @@ def main():
     except Exception:
         errors.append(traceback.format_exc())
     finally:
-        _log_run(engine, started_at, new_jobs_found, errors)
+        if engine is not None:
+            _log_run(engine, started_at, new_jobs_found, errors)
+        elif errors:
+            print("\nErrores durante el scraping (no se pudo registrar en run_log, engine no disponible):", *errors, sep="\n")
 
 
 def _log_run(engine, started_at, new_jobs_found, errors):

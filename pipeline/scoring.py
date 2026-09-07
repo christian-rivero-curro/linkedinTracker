@@ -8,6 +8,7 @@ from pipeline.llm_client import call_llm_json
 from pipeline.embeddings import cosine_similarity
 
 PROMPT_PATH = Path(__file__).parent / "prompts" / "evaluate_job.txt"
+DEFAULT_SCORING_MODEL = "minimax/minimax-m2.7:free"
 
 BLACKLIST_KEYWORDS = [
     "marketing", "sales", "ventas", "legal", "teacher", "docente",
@@ -51,8 +52,21 @@ def _clean_recommendation(value) -> str:
     return "consider"
 
 
+def _resolve_model_env(name: str, default: str) -> str:
+    """
+    Lee una variable de entorno de modelo de OpenRouter, tratando valores
+    vacios o solo con espacios como si no estuvieran definidos. Necesario
+    porque en GitHub Actions una variable de repo (`vars.*`) sin configurar
+    se pasa igualmente como env var, pero con cadena vacia: os.environ.get()
+    con default NO cubre ese caso (la clave existe, solo que vacia), y eso
+    provocaba enviar model="" a la API de OpenRouter (400 Bad Request).
+    """
+    value = os.environ.get(name, "").strip()
+    return value if value else default
+
+
 def evaluate_job_with_llm(profile_json: dict, job: dict) -> dict:
-    model = os.environ.get("OPENROUTER_MODEL_SCORING", "minimax/minimax-m2.7:free")
+    model = _resolve_model_env("OPENROUTER_MODEL_SCORING", DEFAULT_SCORING_MODEL)
     prompt_template = PROMPT_PATH.read_text(encoding="utf-8")
     prompt = prompt_template.format(
         profile_json=profile_json,

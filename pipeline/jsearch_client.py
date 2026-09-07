@@ -2,158 +2,62 @@
 Cliente para JSearch API (RapidAPI), free tier 200 req/mes.
 Devuelve ofertas con enlace directo (LinkedIn cuando la fuente original lo es).
 
-Notas sobre /search-v2 (segun documentacion oficial de OpenWeb Ninja):
-- La lista real de ofertas esta en data['data']['jobs'] (con 'cursor' para paginacion),
-  no directamente en data['data'] como en la v1.
-- Para queries fuera de EE.UU. hay que combinar 'country' Y 'language'.
-- El filtro de solo remoto se llama 'work_from_home' (no 'remote_jobs_only').
-- date_posted='week' puede devolver 0 resultados para roles de nicho en ciudades
-  concretas (validado manualmente); por defecto se usa 'month' via JSEARCH_DATE_POSTED.
-- No existe parametro de ordenacion (sort_by): el orden de resultados es la
-  relevancia interna de Google for Jobs, no cronologico. Por eso el filtrado
-  real por fecha se hace del lado del cliente en pipeline/run_discovery.py
-  usando job_posted_at_datetime_utc, sin confiar en el orden de la respuesta.
-- 'page' permite pedir paginas sucesivas (1, 2, 3...) en llamadas separadas;
-  cada llamada consume 1 credito de la cuota mensual, sea cual sea la pagina.
-- 'num_pages' controla si la API agrega varias paginas en una sola llamada
-  (server-side); se deja en 1 por defecto y se usa 'page' para paginar de forma
-  controlada y poder parar en cuanto los resultados dejan de aportar nada nuevo.
-- La API es un agregador de terceros (Jobrapido, Bing Jobs, Jooble, etc.) y sus
-  campos no son 100% fiables en tipo ni encoding: normalize_job() sanea todo
-  texto (fuerza str, elimina surrogates sueltos/mojibake) y coacciona salarios
-  y booleanos de forma defensiva, para no propagar errores de formato aguas
-  abajo (embeddings, insert en Postgres).
+JSEARCH_SOURCE_FILTER restringe la busqueda a un publisher concreto (por
+defecto 'linkedin'). JSearch no expone un parametro de API estricto para esto;
+la forma documentada de acotar por fuente es anadir "via <publisher>" al texto
+de la query (ver docs de OpenWeb Ninja). No es una garantia al 100% - por eso
+run_discovery.py aplica ademas un filtro de seguridad en base al job_publisher
+ya clasificado (normalize_job) antes de guardar cualquier oferta.
 """
 import os
-import json
 import httpx
 
-JSEARCH_BASE_URL = "https://jsearch.p.rapidapi.com/search-v2"
+JSEARCH_BASE_URL = "https://jsearch.p.rapidapi.com/search"
 
 
-def _safe_int(value, default: int) -> int:
-    """Coacciona a int de forma segura (config o parametros de llamada); nunca lanza."""
-    if value is None:
-        return default
-    try:
-        return int(str(value).strip())
-    except (TypeError, ValueError):
-        print(f"[jsearch_client] Valor invalido '{value}', usando default {default}.")
-        return default
+def _source_filter_suffix() -> str:
+    source = os.environ.get("JSEARCH_SOURCE_FILTER", "linkedin").strip().lower()
+    return f" via {source}" if source else ""
 
 
-def search_jobs(
-    query: str,
-    location: str | None,
-    remote_only: bool,
-    date_posted: str | None = None,
-    num_pages: int | None = None,
-    page: int = 1,
-) -> list[dict]:
+def search_jobs(query: str, location: str | None, remote_only: bool, page: int = 1, date_posted: str = "week") -> list[dict]:
     api_key = os.environ["RAPIDAPI_KEY"]
     host = os.environ.get("RAPIDAPI_JSEARCH_HOST", "jsearch.p.rapidapi.com")
-    country = os.environ.get("JSEARCH_COUNTRY", "es")
-    language = os.environ.get("JSEARCH_LANGUAGE", "en")
-    if date_posted is None:
-        date_posted = os.environ.get("JSEARCH_DATE_POSTED", "month")
-    if num_pages is None:
-        num_pages = _safe_int(os.environ.get("JSEARCH_NUM_PAGES"), 1)
-    else:
-        num_pages = _safe_int(num_pages, 1)
-    page = _safe_int(page, 1)
-
     headers = {"X-RapidAPI-Key": api_key, "X-RapidAPI-Host": host}
+
+    full_query = f"{query} in {location}" if location else query
+    full_query = f"{full_query}{_source_filter_suffix()}"
+
     params = {
-        "query": f"{query} in {location}" if location else query,
-        "page": str(max(1, page)),
-        "num_pages": str(max(1, num_pages)),
-        "country": country,
-        "language": language,
+        "query": full_query,
+        "page": str(page),
+        "num_pages": "1",
         "date_posted": date_posted,
         "employment_types": "FULLTIME",
     }
     if remote_only:
-        params["work_from_home"] = "true"
+        params["remote_jobs_only"] = "true"
 
     with httpx.Client(timeout=30) as client:
         resp = client.get(JSEARCH_BASE_URL, headers=headers, params=params)
     resp.raise_for_status()
     data = resp.json()
-
-    data_field = data.get("data", [])
-    if isinstance(data_field, dict):
-        raw_items = data_field.get("jobs", [])
-    else:
-        raw_items = data_field
-
-    jobs: list[dict] = []
-    for item in raw_items:
-        if isinstance(item, str):
-            try:
-                item = json.loads(item)
-            except json.JSONDecodeError:
-                print(f"[jsearch_client] Entrada no es JSON valido, se ignora: {item[:200]}")
-                continue
-        if isinstance(item, dict):
-            jobs.append(item)
-        else:
-            print(f"[jsearch_client] Entrada con tipo inesperado ({type(item)}), se ignora.")
-    return jobs
-
-
-def _clean_text(value):
-    """
-    Normaliza cualquier valor a un str seguro para DB/embeddings, o None si el
-    valor original era None (preserva nullability de campos opcionales).
-
-    Fuerza a str si la API devuelve un tipo inesperado (list, dict, numero) en
-    vez de propagar ese tipo aguas abajo, y elimina caracteres Unicode invalidos
-    (surrogates sueltos, mojibake) que a veces llegan en texto agregado desde
-    sitios externos (Jobrapido, Bing Jobs, Jooble...). Sin esto, tanto el
-    tokenizer de embeddings como la escritura UTF-8 en Postgres fallan con
-    errores dificiles de rastrear.
-    """
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        value = str(value)
-    return value.encode("utf-8", errors="ignore").decode("utf-8")
-
-
-def _clean_int(value):
-    """Coacciona a int de forma segura (salarios); None si no es convertible."""
-    if value is None:
-        return None
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def _clean_bool(value) -> bool:
-    """Coacciona a bool de forma segura: la API a veces devuelve 'true'/'false' como
-    string en vez de bool nativo, y bool('false') seria True si no se maneja aqui."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in ("true", "1", "yes")
-    return bool(value)
+    return data.get("data", [])
 
 
 def normalize_job(raw: dict) -> dict:
-    publisher = _clean_text(raw.get("job_publisher")) or ""
-    publisher = publisher.lower()
+    publisher = (raw.get("job_publisher") or "").lower()
     source = "linkedin" if "linkedin" in publisher else ("indeed" if "indeed" in publisher else "other")
     return {
-        "external_id": _clean_text(raw.get("job_id")),
-        "title": _clean_text(raw.get("job_title")) or "Sin titulo",
-        "company": _clean_text(raw.get("employer_name")),
-        "location": _clean_text(raw.get("job_city") or raw.get("job_country")),
-        "remote_type": "remote" if _clean_bool(raw.get("job_is_remote")) else "onsite",
-        "description": _clean_text(raw.get("job_description")) or "",
-        "apply_link": _clean_text(raw.get("job_apply_link") or raw.get("job_google_link")) or "",
+        "external_id": raw.get("job_id"),
+        "title": raw.get("job_title") or "Sin titulo",
+        "company": raw.get("employer_name"),
+        "location": raw.get("job_city") or raw.get("job_country"),
+        "remote_type": "remote" if raw.get("job_is_remote") else "onsite",
+        "description": raw.get("job_description") or "",
+        "apply_link": raw.get("job_apply_link") or raw.get("job_google_link") or "",
         "source": source,
-        "salary_min": _clean_int(raw.get("job_min_salary")),
-        "salary_max": _clean_int(raw.get("job_max_salary")),
+        "salary_min": raw.get("job_min_salary"),
+        "salary_max": raw.get("job_max_salary"),
         "posted_at": raw.get("job_posted_at_datetime_utc"),
     }

@@ -5,6 +5,7 @@
   <h1>{{ detail.title }} &mdash; {{ detail.company }}</h1>
   <p>
     <span class="badge {{ detail.source }}">{{ detail.source }}</span>
+    {% if detail.recommendation == 'skip' %}<span class="badge" style="background:#fee2e2;color:#b91c1c;">no cumple requisitos</span>{% endif %}
     {{ detail.location }} &middot; {{ detail.remote_type }}
   </p>
   <p class="muted">
@@ -35,6 +36,14 @@
     <a href="/dashboard?status=applied" class="{{ 'active' if status == 'applied' else '' }}">Aplicadas</a>
     <a href="/dashboard?status=discarded" class="{{ 'active' if status == 'discarded' else '' }}">Descartadas</a>
   </div>
+  <p class="muted">
+    Solo se muestran ofertas que cumplen los requisitos duros de la descripcion (anios de experiencia, certificaciones, idioma...) segun la evaluacion del LLM.
+    {% if show_skipped %}
+      <a href="/dashboard?status={{ status }}">Ocultar las que no cumplen requisitos</a>
+    {% else %}
+      <a href="/dashboard?status={{ status }}&show_skipped=1">Ver tambien las que no cumplen requisitos (auditoria)</a>
+    {% endif %}
+  </p>
   <p class="muted">Haz clic en cualquier cabecera de columna para ordenar la tabla.</p>
   <div class="table-wrap">
     <table class="sortable">
@@ -61,6 +70,7 @@
           <td>
             <a href="/dashboard/{{ job.id }}">{{ job.title }}</a>
             {% if not job.llm_evaluated %} <em class="muted">(pendiente LLM)</em>{% endif %}
+            {% if job.recommendation == 'skip' %} <span class="badge" style="background:#fee2e2;color:#b91c1c;">no cumple requisitos</span>{% endif %}
           </td>
           <td>{{ job.company }}</td>
           <td data-value="{{ job.source }}"><span class="badge {{ job.source }}">{{ job.source }}</span></td>

@@ -4,8 +4,9 @@ Automatizacion con Playwright de la busqueda de empleo de LinkedIn.
 IMPORTANTE: los selectores de DOM usados aqui son los documentados/observados
 a fecha de escritura de este modulo. LinkedIn cambia su HTML con cierta
 frecuencia; si scrape_variant() deja de encontrar tarjetas o descripcion, este
-es el primer sitio a revisar (usa el inspector del navegador sobre una
-busqueda real para actualizar los selectores).
+es el primer sitio a revisar. Los logs de esta funcion estan pensados
+precisamente para detectar eso rapido: cuantas tarjetas ve el DOM, cuantas se
+descartan y por que.
 
 Disenado para minimizar senales de bot:
 - Reutiliza una sesion guardada (storage_state) en vez de loguearse cada vez.
@@ -14,10 +15,13 @@ Disenado para minimizar senales de bot:
   authwall o redireccion a login - nunca reintenta en bucle sobre un bloqueo.
 
 Nota Docker: Chromium necesita memoria compartida (/dev/shm) suficiente; el
-default de Docker (64MB) suele quedarse corto y el renderer se cuelga sin dar
-error claro (page.goto revienta en timeout). Por eso se lanza siempre con
---disable-dev-shm-usage (usa /tmp en su lugar), ademas de ampliar shm_size en
-docker-compose.linkedin.yml como margen extra.
+default de Docker (64MB) suele quedarse corto. Por eso se lanza siempre con
+--disable-dev-shm-usage, ademas de ampliar shm_size en docker-compose.linkedin.yml.
+
+Nota sobre paginas: cada variante debe usar una pestana (page) NUEVA - ver
+run_linkedin_scrape.py. Reutilizar la misma pestana entre navegaciones
+sucesivas puede dejar una navegacion anterior a medias en segundo plano y
+provocar timeouts/abortos en cascada en las siguientes.
 """
 import os
 import random
@@ -50,6 +54,10 @@ CHROMIUM_LAUNCH_ARGS = [
 
 class LinkedInBlockedError(Exception):
     """LinkedIn ha mostrado un checkpoint/authwall/login; hay que parar y NO reintentar en bucle."""
+
+
+def _log(message: str):
+    print(f"  [linkedin_scraper] {message}")
 
 
 def _random_delay(min_s: float = 1.5, max_s: float = 4.0):
@@ -113,6 +121,9 @@ def new_browser_context(playwright, headless: bool = True):
     context_kwargs = {"viewport": {"width": 1366, "height": 900}}
     if os.path.exists(STORAGE_STATE_PATH):
         context_kwargs["storage_state"] = STORAGE_STATE_PATH
+        _log(f"Sesion cargada desde {STORAGE_STATE_PATH}")
+    else:
+        _log(f"AVISO: no existe {STORAGE_STATE_PATH}; se navegara SIN sesion (LinkedIn redirigira a login).")
     context = browser.new_context(**context_kwargs)
     context.set_default_navigation_timeout(NAVIGATION_TIMEOUT_MS)
     context.set_default_timeout(NAVIGATION_TIMEOUT_MS)
@@ -123,32 +134,50 @@ def scrape_variant(page, query_text: str, location: str | None, remote_preferenc
     """
     Navega a la busqueda de LinkedIn para esta variante y devuelve una lista de
     dicts en el formato normalizado que espera pipeline/job_ingest.py.
+
+    IMPORTANTE: 'page' debe ser una pestana recien creada para esta variante
+    (ver run_linkedin_scrape.py). No reutilizar la misma pestana entre
+    variantes: deja navegaciones a medias que provocan timeouts/abortos en
+    cascada en las siguientes llamadas.
     """
     url = build_search_url(query_text, location, remote_preference, hours_ago)
+    _log(f"URL de busqueda: {url}")
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
     except PlaywrightTimeoutError:
         raise TimeoutError(f"Timeout navegando a LinkedIn. Ultima URL alcanzada: {page.url}")
+    _log(f"Pagina cargada. URL final tras redirecciones: {page.url}")
     _random_delay(2, 4)
     _check_blocked(page)
 
     try:
         page.wait_for_selector(RESULTS_LIST_SELECTOR, timeout=15000)
+        _log("Lista de resultados encontrada en el DOM.")
     except PlaywrightTimeoutError:
         _check_blocked(page)
+        _log(
+            "AVISO: no se encontro el contenedor de resultados "
+            f"(selector actual: '{RESULTS_LIST_SELECTOR}'). Puede que LinkedIn haya cambiado el HTML, "
+            "o que la busqueda no tenga resultados para estos filtros. 0 ofertas para esta variante."
+        )
         return []
 
     jobs = []
     seen_ids = set()
     scroll_attempts = 0
+    skipped_no_id = 0
 
     while len(jobs) < max_jobs and scroll_attempts < 15:
         cards = page.query_selector_all(JOB_CARD_SELECTOR)
+        _log(f"Scroll {scroll_attempts + 1}: {len(cards)} tarjetas visibles en el DOM (selector '{JOB_CARD_SELECTOR}'), {len(jobs)} unicas acumuladas hasta ahora.")
         for card in cards:
             if len(jobs) >= max_jobs:
                 break
             job_id = card.get_attribute("data-job-id") or card.get_attribute("data-occludable-job-id")
-            if not job_id or job_id in seen_ids:
+            if not job_id:
+                skipped_no_id += 1
+                continue
+            if job_id in seen_ids:
                 continue
             seen_ids.add(job_id)
 
@@ -169,11 +198,11 @@ def scrape_variant(page, query_text: str, location: str | None, remote_preferenc
                     desc_el = page.wait_for_selector(DESCRIPTION_SELECTOR, timeout=8000)
                     description = desc_el.inner_text().strip()
             except PlaywrightTimeoutError:
-                pass
+                _log(f"AVISO: no se pudo cargar la descripcion de '{title}' (selector '{DESCRIPTION_SELECTOR}' no encontrado a tiempo).")
             except LinkedInBlockedError:
                 raise
-            except Exception:
-                pass
+            except Exception as e:
+                _log(f"AVISO: error inesperado leyendo descripcion de '{title}': {e}")
 
             posted_at = _parse_relative_posted_at(metadata_text) or datetime.now(timezone.utc)
 
@@ -190,6 +219,7 @@ def scrape_variant(page, query_text: str, location: str | None, remote_preferenc
                 "salary_max": None,
                 "posted_at": posted_at.isoformat(),
             })
+            _log(f"Extraida: '{title}' - {company or 'empresa desconocida'} (id={job_id}, descripcion={len(description)} caracteres)")
             _random_delay(0.8, 2.0)
 
         if len(jobs) >= max_jobs:
@@ -198,5 +228,9 @@ def scrape_variant(page, query_text: str, location: str | None, remote_preferenc
         page.mouse.wheel(0, 1200)
         _random_delay(1.5, 3.0)
         scroll_attempts += 1
+
+    if skipped_no_id:
+        _log(f"AVISO: {skipped_no_id} tarjetas sin atributo data-job-id/data-occludable-job-id, ignoradas (posible selector desactualizado).")
+    _log(f"Total extraido para esta variante: {len(jobs)} ofertas.")
 
     return jobs

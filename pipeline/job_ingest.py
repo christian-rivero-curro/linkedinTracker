@@ -19,7 +19,9 @@ process_and_store_job():
 }
 
 Centralizar esto evita que la logica de dedup/filtros/embedding diverja entre
-JSearch y el scraper de LinkedIn.
+JSearch y el scraper de LinkedIn. El parametro verbose (por defecto False,
+para no ensuciar los logs del cron de JSearch cada 4h) imprime el motivo
+exacto por el que se descarta cada oferta - activado por run_linkedin_scrape.py.
 """
 import os
 from datetime import datetime, timedelta, timezone
@@ -70,12 +72,6 @@ def parse_posted_at(value):
 
 
 def is_excluded_by_profile(title: str, description: str, profile: dict) -> bool:
-    """
-    Filtros negativos definidos por el propio usuario en profile.excluded_keywords,
-    ademas de la blacklist generica (is_blacklisted). Se comprueban en titulo Y
-    descripcion para no dejar pasar ofertas con titulo generico pero contenido
-    claramente excluido.
-    """
     excluded = [kw.lower() for kw in (profile.get("excluded_keywords") or []) if kw]
     if not excluded:
         return False
@@ -84,25 +80,31 @@ def is_excluded_by_profile(title: str, description: str, profile: dict) -> bool:
 
 
 def process_and_store_job(
-    conn, job: dict, profile: dict, cutoff, errors: list, variant_id, allowed_sources: list[str] | None = None
+    conn,
+    job: dict,
+    profile: dict,
+    cutoff,
+    errors: list,
+    variant_id,
+    allowed_sources: list[str] | None = None,
+    verbose: bool = False,
 ) -> tuple[bool, object, bool]:
     """
     Inserta una oferta ya normalizada en job_offer/job_score. Aplica, en orden,
     los mismos filtros para CUALQUIER fuente:
       1. Techo absoluto de antiguedad (MAX_JOB_AGE_DAYS).
-      2. Cutoff relativo de la variante (anti-solapamiento entre ejecuciones;
-         pasar cutoff=None para desactivarlo, como hace el scraper de LinkedIn
-         que ya viene pre-filtrado por f_TPR).
-      3. allowed_sources: si se especifica, descarta cualquier oferta cuyo
-         'source' no este en la lista (usado por JSearch para forzar solo
-         LinkedIn aunque el filtro "via linkedin" de la query no sea 100% fiable).
+      2. Cutoff relativo de la variante.
+      3. allowed_sources.
       4. Blacklist generica (is_blacklisted) + excluded_keywords del perfil.
       5. Deduplicacion por external_id.
 
-    Devuelve (es_fresca, posted_at, fue_insertada): es_fresca se usa en
-    run_discovery.py para decidir si seguir paginando JSearch.
+    Devuelve (es_fresca, posted_at, fue_insertada).
     """
+    label = job.get("external_id") or job.get("title") or "oferta sin identificar"
+
     if not job.get("external_id") or not job.get("apply_link"):
+        if verbose:
+            print(f"  [job_ingest] DESCARTADA '{label}': falta external_id o apply_link.")
         return False, None, False
 
     posted_at = parse_posted_at(job.get("posted_at"))
@@ -110,13 +112,19 @@ def process_and_store_job(
     if posted_at is not None:
         max_age_threshold = datetime.now(timezone.utc) - timedelta(days=MAX_JOB_AGE_DAYS)
         if posted_at < max_age_threshold:
+            if verbose:
+                print(f"  [job_ingest] DESCARTADA '{label}': mas antigua que MAX_JOB_AGE_DAYS={MAX_JOB_AGE_DAYS} dias (posted_at={posted_at}).")
             return False, posted_at, False
 
     is_fresh = cutoff is None or posted_at is None or posted_at > cutoff
     if not is_fresh:
+        if verbose:
+            print(f"  [job_ingest] DESCARTADA '{label}': anterior al cutoff de la variante ({cutoff}).")
         return False, posted_at, False
 
     if allowed_sources and job.get("source") not in allowed_sources:
+        if verbose:
+            print(f"  [job_ingest] DESCARTADA '{label}': source='{job.get('source')}' no esta en allowed_sources={allowed_sources}.")
         return True, posted_at, False
 
     title = safe_text(job.get("title"))
@@ -125,9 +133,13 @@ def process_and_store_job(
     if is_blacklisted(title) and not any(
         kw in title.lower() for kw in profile.get("role_family", [])
     ):
+        if verbose:
+            print(f"  [job_ingest] DESCARTADA '{label}': titulo en blacklist generica.")
         return True, posted_at, False
 
     if is_excluded_by_profile(title, description, profile):
+        if verbose:
+            print(f"  [job_ingest] DESCARTADA '{label}': coincide con excluded_keywords del perfil.")
         return True, posted_at, False
 
     existing = conn.execute(
@@ -135,6 +147,8 @@ def process_and_store_job(
         {"eid": job["external_id"]},
     ).first()
     if existing:
+        if verbose:
+            print(f"  [job_ingest] DESCARTADA '{label}': ya existe en job_offer (external_id duplicado, id={existing[0]}).")
         return True, posted_at, False
 
     embed_input = f"{title} {description}".strip() or "oferta sin descripcion"
@@ -142,6 +156,8 @@ def process_and_store_job(
         job_embedding = embed_text(embed_input)
     except Exception as e:
         errors.append(f"Error generando embedding para job {job['external_id']}: {e}")
+        if verbose:
+            print(f"  [job_ingest] ERROR '{label}': fallo generando embedding: {e}")
         return True, posted_at, False
 
     similarity = cosine_similarity(job_embedding, profile["embedding"])
@@ -180,4 +196,6 @@ def process_and_store_job(
         """),
         {"job_offer_id": job_offer_id, "similarity": similarity, "final_score": similarity * 100},
     )
+    if verbose:
+        print(f"  [job_ingest] INSERTADA '{label}' (job_offer.id={job_offer_id}, similitud={similarity:.3f}).")
     return True, posted_at, True

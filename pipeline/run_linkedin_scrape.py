@@ -1,21 +1,21 @@
 """
 Entrypoint del scraper de LinkedIn. Pensado para ejecutarse EN LOCAL o en un
-contenedor Docker en TU PROPIA maquina - NUNCA en GitHub Actions: los runners
-de Actions usan IPs de datacenter que LinkedIn detecta y bloquea con mucha
-mas facilidad que una IP residencial.
+contenedor Docker en TU PROPIA maquina - NUNCA en GitHub Actions.
 
 Requiere haber ejecutado antes pipeline/linkedin_login.py una vez para generar
 la sesion guardada (ver LINKEDIN_STORAGE_STATE).
 
-Reutiliza pipeline/job_ingest.py, la misma logica de insercion que
-run_discovery.py, asi que las ofertas encontradas aqui entran en el mismo
-pipeline de scoring vectorial + evaluacion LLM (run_llm_evaluation.py las
-recoge igual, sin cambios).
+Cada variante usa una PESTANA NUEVA (context.new_page()), cerrada al terminar
+esa variante. Reutilizar la misma pestana entre navegaciones sucesivas dejaba
+navegaciones a medias en segundo plano que provocaban timeouts/abortos en
+cascada en las variantes siguientes.
+
+Reutiliza pipeline/job_ingest.py (verbose=True, para ver el motivo exacto de
+cada oferta descartada) - mismo pipeline de scoring vectorial + evaluacion LLM
+que run_discovery.py.
 
 Fail-soft con una excepcion deliberada: si LinkedIn devuelve un
-checkpoint/bloqueo, el script para INMEDIATAMENTE sin reintentar (para no
-escalar una posible restriccion de cuenta) y lo deja registrado en
-run_log.errors.
+checkpoint/bloqueo, el script para INMEDIATAMENTE sin reintentar.
 """
 import os
 import sys
@@ -76,23 +76,25 @@ def main():
         if profile is None:
             errors.append("No hay perfil configurado (profile.id=1). Completa el onboarding primero.")
             return
+        print(f"Perfil cargado. location_preference={profile.get('location_preference')!r}, remote_preference={profile.get('remote_preference')!r}")
 
         variants = [v for v in get_all_variants(engine, profile_id=1) if v.get("is_active", True)]
         if not variants:
             errors.append("No hay variantes de busqueda activas.")
             return
+        print(f"{len(variants)} variante(s) activa(s) a procesar: {[v['query_text'] for v in variants]}")
 
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as p:
             browser, context = new_browser_context(p, headless=LINKEDIN_HEADLESS)
-            page = context.new_page()
 
             for variant in variants:
                 if blocked:
                     break
+                print(f"\n=== Variante '{variant['query_text']}' (id={variant['id']}) ===")
+                page = context.new_page()
                 try:
-                    print(f"LinkedIn scrape - variante '{variant['query_text']}' (id={variant['id']})")
                     raw_jobs = scrape_variant(
                         page,
                         query_text=variant["query_text"],
@@ -104,21 +106,32 @@ def main():
                 except LinkedInBlockedError as e:
                     errors.append(f"BLOQUEO de LinkedIn detectado, abortando ejecucion sin reintentar: {e}")
                     blocked = True
+                    page.close()
                     break
                 except Exception as e:
                     errors.append(f"Error scrapeando variante '{variant['query_text']}': {e}")
+                    print(f"  ERROR: {e}")
+                    page.close()
                     continue
+                finally:
+                    if not page.is_closed():
+                        page.close()
 
+                inserted_this_variant = 0
                 with engine.begin() as conn:
                     for job in raw_jobs:
                         try:
                             _, _, was_inserted = process_and_store_job(
-                                conn, job, profile, cutoff=None, errors=errors, variant_id=variant["id"]
+                                conn, job, profile, cutoff=None, errors=errors, variant_id=variant["id"], verbose=True
                             )
                             if was_inserted:
                                 new_jobs_found += 1
+                                inserted_this_variant += 1
                         except Exception as e:
                             errors.append(f"Error guardando job {job.get('external_id')}: {e}")
+                            print(f"  ERROR guardando {job.get('external_id')}: {e}")
+
+                print(f"  Resumen variante: {len(raw_jobs)} scrapeadas, {inserted_this_variant} insertadas como nuevas.")
 
                 time.sleep(random.uniform(5, 12))
 
@@ -145,8 +158,8 @@ def _log_run(engine, started_at, new_jobs_found, errors):
             },
         )
     if errors:
-        print("Errores durante el scraping:", *errors, sep="\n")
-    print(f"Scraping de LinkedIn finalizado. Ofertas nuevas: {new_jobs_found}.")
+        print("\nErrores durante el scraping:", *errors, sep="\n")
+    print(f"\nScraping de LinkedIn finalizado. Ofertas nuevas: {new_jobs_found}.")
 
 
 if __name__ == "__main__":

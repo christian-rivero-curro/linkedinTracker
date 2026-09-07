@@ -179,7 +179,7 @@ def dashboard(request: Request, status: str = "all"):
     engine = get_engine()
     query = """
         SELECT js.id, jo.title, jo.company, jo.location, jo.remote_type, jo.apply_link,
-               jo.source, js.final_score, js.llm_score, js.status, js.llm_evaluated
+               jo.source, jo.posted_at, jo.fetched_at, js.final_score, js.llm_score, js.status, js.llm_evaluated
         FROM job_score js
         JOIN job_offer jo ON jo.id = js.job_offer_id
         WHERE js.profile_id = 1
@@ -202,7 +202,7 @@ def dashboard_detail(request: Request, job_score_id: int):
         row = conn.execute(
             text("""
                 SELECT js.*, jo.title, jo.company, jo.location, jo.remote_type,
-                       jo.description, jo.apply_link, jo.source
+                       jo.description, jo.apply_link, jo.source, jo.posted_at, jo.fetched_at
                 FROM job_score js
                 JOIN job_offer jo ON jo.id = js.job_offer_id
                 WHERE js.id = :id

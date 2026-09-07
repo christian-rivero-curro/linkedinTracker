@@ -52,18 +52,24 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+from playwright_stealth import Stealth
 
 STORAGE_STATE_PATH = os.environ.get("LINKEDIN_STORAGE_STATE", "linkedin_session/storage_state.json")
 DIAGNOSTICS_DIR = os.environ.get("LINKEDIN_DIAGNOSTICS_DIR", "linkedin_diagnostics")
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+)
 
 WORKPLACE_TYPE_MAP = {"remote": "2", "hybrid": "3", "onsite": "1"}
 
-JOB_CARD_SELECTOR = "div.job-card-container, li.jobs-search-results__list-item"
-TITLE_SELECTOR = "a.job-card-list__title, a.job-card-container__link, strong"
-COMPANY_SELECTOR = ".artdeco-entity-lockup__subtitle, .job-card-container__company-name"
-METADATA_SELECTOR = ".job-card-container__metadata-item, .artdeco-entity-lockup__caption"
-DESCRIPTION_SELECTOR = "#job-details, .jobs-description__content, .jobs-box__html-content"
-RESULTS_LIST_SELECTOR = "div.jobs-search-results-list, ul.jobs-search__results-list"
+JOB_CARD_SELECTOR = "li.scaffold-layout__list-item, div.job-card-container, li.jobs-search-results__list-item, div.job-card-job-posting-card-wrapper"
+TITLE_SELECTOR = "a[href*='/jobs/view/'], a.job-card-list__title, a.job-card-container__link, strong"
+COMPANY_SELECTOR = ".artdeco-entity-lockup__subtitle, .job-card-container__company-name, div.job-details-jobs-unified-top-card__company-name, .job-card-container__primary-description"
+METADATA_SELECTOR = ".job-card-container__metadata-item, .artdeco-entity-lockup__caption, ul.job-card-container__metadata-wrapper"
+DESCRIPTION_SELECTOR = "#job-details, .jobs-description__content, .jobs-box__html-content, .jobs-description"
+RESULTS_LIST_SELECTOR = ".scaffold-layout__list, .scaffold-layout__list-container, div.jobs-search-results-list, ul.jobs-search__results-list, .jobs-search-two-pane__layout"
+NO_RESULTS_SELECTOR = ".jobs-search-no-results-banner, .jobs-search-no-results, div:has-text('No se han encontrado empleos'), div:has-text('No matching jobs found')"
 
 # Timeout general del contexto/acciones (clicks, selectors sueltos, etc.)
 DEFAULT_ACTION_TIMEOUT_MS = 60000
@@ -152,8 +158,11 @@ def _save_diagnostics(page, label: str, diag_state: dict | None = None):
         safe_label = re.sub(r"[^a-zA-Z0-9_-]", "_", label)[:50]
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         screenshot_path = os.path.join(DIAGNOSTICS_DIR, f"{timestamp}_{safe_label}.png")
-        page.screenshot(path=screenshot_path)
-        _log(f"DIAGNOSTICO: screenshot guardado en {screenshot_path}")
+        try:
+            page.screenshot(path=screenshot_path, timeout=5000, animations="disabled")
+            _log(f"DIAGNOSTICO: screenshot guardado en {screenshot_path}")
+        except Exception as se:
+            _log(f"DIAGNOSTICO: no se pudo tomar screenshot ({se})")
         try:
             title = page.title()
         except Exception:
@@ -238,14 +247,28 @@ def _detect_remote_type(metadata_text: str | None) -> str | None:
 
 
 def new_browser_context(playwright, headless: bool = True):
-    browser = playwright.chromium.launch(headless=headless, args=CHROMIUM_LAUNCH_ARGS)
-    context_kwargs = {"viewport": {"width": 1366, "height": 900}}
+    launch_kwargs = {
+        "headless": headless,
+        "args": list(CHROMIUM_LAUNCH_ARGS),
+    }
+    if headless:
+        launch_kwargs["ignore_default_args"] = ["--headless"]
+        launch_kwargs["args"].append("--headless=new")
+
+    browser = playwright.chromium.launch(**launch_kwargs)
+    context_kwargs = {
+        "viewport": {"width": 1366, "height": 900},
+        "user_agent": DEFAULT_USER_AGENT,
+        "locale": "es-ES",
+        "timezone_id": "Europe/Madrid",
+    }
     if os.path.exists(STORAGE_STATE_PATH):
         context_kwargs["storage_state"] = STORAGE_STATE_PATH
         _log(f"Sesion cargada desde {STORAGE_STATE_PATH}")
     else:
         _log(f"AVISO: no existe {STORAGE_STATE_PATH}; se navegara SIN sesion (LinkedIn redirigira a login).")
     context = browser.new_context(**context_kwargs)
+    Stealth().apply_stealth_sync(context)
     context.set_default_navigation_timeout(DEFAULT_ACTION_TIMEOUT_MS)
     context.set_default_timeout(DEFAULT_ACTION_TIMEOUT_MS)
     return browser, context
@@ -261,6 +284,7 @@ def scrape_variant(page, query_text: str, location: str | None, remote_preferenc
     resultados - senal fuerte de app colgada en el loader, distinta de un '0
     resultados' legitimo donde domcontentloaded si se completa.
     """
+    Stealth().apply_stealth_sync(page)
     url = build_search_url(query_text, location, remote_preference, hours_ago)
     _log(f"URL de busqueda: {url}")
 
@@ -282,6 +306,11 @@ def scrape_variant(page, query_text: str, location: str | None, remote_preferenc
 
     _random_delay(2, 4)
     _check_blocked(page)
+
+    no_res = page.query_selector(NO_RESULTS_SELECTOR)
+    if no_res and no_res.is_visible():
+        _log("LinkedIn muestra aviso de 'No se han encontrado empleos'. 0 ofertas para esta variante.")
+        return []
 
     try:
         page.wait_for_selector(RESULTS_LIST_SELECTOR, timeout=RESULTS_SELECTOR_TIMEOUT_MS)
@@ -313,6 +342,12 @@ def scrape_variant(page, query_text: str, location: str | None, remote_preferenc
             if len(jobs) >= max_jobs:
                 break
             job_id = card.get_attribute("data-job-id") or card.get_attribute("data-occludable-job-id")
+            title_el = card.query_selector(TITLE_SELECTOR)
+            if not job_id and title_el:
+                href = title_el.get_attribute("href") or ""
+                m = re.search(r"/jobs/view/(\d+)", href)
+                if m:
+                    job_id = m.group(1)
             if not job_id:
                 skipped_no_id += 1
                 continue
@@ -320,7 +355,6 @@ def scrape_variant(page, query_text: str, location: str | None, remote_preferenc
                 continue
             seen_ids.add(job_id)
 
-            title_el = card.query_selector(TITLE_SELECTOR)
             company_el = card.query_selector(COMPANY_SELECTOR)
             metadata_el = card.query_selector(METADATA_SELECTOR)
 

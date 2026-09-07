@@ -15,4 +15,5 @@ services:
     volumes:
       - ./linkedin_session:/app/linkedin_session:ro
       - ./linkedin_diagnostics:/app/linkedin_diagnostics
+      - ./pipeline:/app/pipeline
     command: ["python", "pipeline/run_linkedin_scrape.py"]

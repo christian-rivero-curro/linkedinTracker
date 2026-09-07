@@ -18,8 +18,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from playwright.sync_api import sync_playwright
+from playwright_stealth import Stealth
 
 STORAGE_STATE_PATH = os.environ.get("LINKEDIN_STORAGE_STATE", "linkedin_session/storage_state.json")
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+)
 
 
 def main():
@@ -29,7 +34,13 @@ def main():
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
-        context = browser.new_context(viewport={"width": 1366, "height": 900})
+        context = browser.new_context(
+            viewport={"width": 1366, "height": 900},
+            user_agent=DEFAULT_USER_AGENT,
+            locale="es-ES",
+            timezone_id="Europe/Madrid",
+        )
+        Stealth().apply_stealth_sync(context)
         page = context.new_page()
         page.goto("https://www.linkedin.com/login")
         print("Inicia sesion manualmente en la ventana del navegador (incluyendo 2FA si aplica).")

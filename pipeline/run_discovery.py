@@ -10,6 +10,13 @@ costoso en cuota de JSearch que una unica llamada por ejecucion, a cambio de
 un barrido mas exhaustivo del perfil. Hay un corte de seguridad por
 presupuesto mensual que impide superar JSEARCH_MONTHLY_BUDGET.
 
+El cutoff por variante es un filtro RELATIVO (anti-solapamiento entre
+ejecuciones sucesivas de la misma variante): en la primera ejecucion de una
+variante (cutoff=None) no descarta nada por fecha. Como JSearch agrega
+fuentes de terceros con metadata de fecha poco fiable (date_posted='month' no
+es una garantia dura), se aplica ademas JSEARCH_MAX_JOB_AGE_DAYS como techo
+ABSOLUTO de antiguedad, independiente del cutoff.
+
 Fail-soft: nunca debe terminar con excepcion no controlada, incluida la
 lectura de configuracion (variables de entorno mal escritas usan su default
 en vez de tumbar el modulo entero al importarlo).
@@ -61,6 +68,7 @@ TOP_N_FOR_LLM = 8
 VECTOR_SIMILARITY_THRESHOLD = 0.55
 MAX_PAGES_PER_VARIANT = max(1, _int_env("JSEARCH_MAX_PAGES_PER_VARIANT", 3))
 JSEARCH_PAGE_SIZE_HINT = 10  # heuristica: una pagina con menos resultados que esto se asume la ultima
+MAX_JOB_AGE_DAYS = max(1, _int_env("JSEARCH_MAX_JOB_AGE_DAYS", 35))
 
 
 def check_budget(engine) -> tuple[bool, int, int]:
@@ -127,12 +135,26 @@ def _process_job(conn, raw, profile, cutoff, errors) -> tuple[bool, object, bool
       - fue_insertada: True solo si se inserto una fila nueva en job_offer.
     No lanza excepciones de negocio: los fallos puntuales (embedding, etc.)
     se registran en `errors` y la oferta se salta sin insertar.
+
+    Aplica dos filtros de fecha distintos:
+    1. Techo absoluto (MAX_JOB_AGE_DAYS): descarta ofertas demasiado viejas
+       SIEMPRE, incluso en la primera ejecucion de una variante (cutoff=None).
+       Necesario porque el date_posted='month' de la API no es una garantia
+       dura (metadata de fecha poco fiable en fuentes agregadas).
+    2. Cutoff relativo por variante: evita reprocesar lo ya visto entre
+       ejecuciones sucesivas de la MISMA variante.
     """
     job = normalize_job(raw)
     if not job["external_id"] or not job["apply_link"]:
         return False, None, False
 
     posted_at = parse_posted_at(job.get("posted_at"))
+
+    if posted_at is not None:
+        max_age_threshold = datetime.now(timezone.utc) - timedelta(days=MAX_JOB_AGE_DAYS)
+        if posted_at < max_age_threshold:
+            return False, posted_at, False
+
     is_fresh = cutoff is None or posted_at is None or posted_at > cutoff
     if not is_fresh:
         return False, posted_at, False

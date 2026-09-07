@@ -1,37 +1,80 @@
 {% extends "base.html" %}
 {% block content %}
 {% if detail %}
-  <h1>{{ detail.title }} — {{ detail.company }}</h1>
-  <p><span class="badge {{ 'linkedin' if detail.source == 'linkedin' else '' }}">{{ detail.source }}</span>
-     {{ detail.location }} · {{ detail.remote_type }}</p>
-  <p class="score">Score final: {{ detail.final_score }} (LLM: {{ detail.llm_score }})</p>
+<div class="card">
+  <h1>{{ detail.title }} &mdash; {{ detail.company }}</h1>
+  <p>
+    <span class="badge {{ detail.source }}">{{ detail.source }}</span>
+    {{ detail.location }} &middot; {{ detail.remote_type }}
+  </p>
+  <p class="muted">
+    Publicada: {{ detail.posted_at.strftime('%d/%m/%Y') if detail.posted_at else 'desconocida' }}
+    &middot; Anadida al sistema: {{ detail.fetched_at.strftime('%d/%m/%Y %H:%M') if detail.fetched_at else '\u2014' }}
+  </p>
+  <p>
+    {% set s = detail.final_score %}
+    <span class="score-pill {{ 'score-high' if s >= 75 else ('score-mid' if s >= 50 else 'score-low') }}">{{ s | round(1) }}</span>
+    (LLM: {{ detail.llm_score if detail.llm_score is not none else 'pendiente' }})
+  </p>
   <h3>Pros</h3>
   <ul>{% for p in (detail.pros or []) %}<li>{{ p }}</li>{% endfor %}</ul>
   <h3>Contras</h3>
   <ul>{% for c in (detail.cons or []) %}<li>{{ c }}</li>{% endfor %}</ul>
   <h3>Requisitos que faltan</h3>
   <ul>{% for m in (detail.missing_requirements or []) %}<li>{{ m }}</li>{% endfor %}</ul>
-  <p><a href="{{ detail.apply_link }}" target="_blank">Ir a la oferta original</a></p>
-  <p><a href="/dashboard">Volver al dashboard</a></p>
+  <p><a href="{{ detail.apply_link }}" target="_blank">Ir a la oferta original &rarr;</a></p>
+  <p><a href="/dashboard">&larr; Volver al dashboard</a></p>
+</div>
 {% else %}
+<div class="card">
   <h1>Ofertas rankeadas</h1>
-  <table>
-    <thead>
-      <tr><th>Score</th><th>Titulo</th><th>Empresa</th><th>Fuente</th><th>Ubicacion</th><th>Estado</th><th>Enlace</th></tr>
-    </thead>
-    <tbody>
-      {% for job in jobs %}
-      <tr>
-        <td class="score">{{ job.final_score | round(1) }}</td>
-        <td><a href="/dashboard/{{ job.id }}">{{ job.title }}</a>{% if not job.llm_evaluated %} <em>(pendiente LLM)</em>{% endif %}</td>
-        <td>{{ job.company }}</td>
-        <td><span class="badge {{ 'linkedin' if job.source == 'linkedin' else '' }}">{{ job.source }}</span></td>
-        <td>{{ job.location }} ({{ job.remote_type }})</td>
-        <td>{{ job.status }}</td>
-        <td><a href="{{ job.apply_link }}" target="_blank">Ver</a></td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="filters">
+    <a href="/dashboard?status=all" class="{{ 'active' if status == 'all' else '' }}">Todas</a>
+    <a href="/dashboard?status=new" class="{{ 'active' if status == 'new' else '' }}">Nuevas</a>
+    <a href="/dashboard?status=viewed" class="{{ 'active' if status == 'viewed' else '' }}">Vistas</a>
+    <a href="/dashboard?status=applied" class="{{ 'active' if status == 'applied' else '' }}">Aplicadas</a>
+    <a href="/dashboard?status=discarded" class="{{ 'active' if status == 'discarded' else '' }}">Descartadas</a>
+  </div>
+  <p class="muted">Haz clic en cualquier cabecera de columna para ordenar la tabla.</p>
+  <div class="table-wrap">
+    <table class="sortable">
+      <thead>
+        <tr>
+          <th class="sortable" data-type="number">Score</th>
+          <th class="sortable" data-type="text">Titulo</th>
+          <th class="sortable" data-type="text">Empresa</th>
+          <th class="sortable" data-type="text">Fuente</th>
+          <th class="sortable" data-type="text">Ubicacion</th>
+          <th class="sortable" data-type="date">Publicada</th>
+          <th class="sortable" data-type="date">Anadida</th>
+          <th class="sortable" data-type="text">Estado</th>
+          <th>Enlace</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in jobs %}
+        <tr>
+          <td data-value="{{ job.final_score }}">
+            {% set s = job.final_score %}
+            <span class="score-pill {{ 'score-high' if s >= 75 else ('score-mid' if s >= 50 else 'score-low') }}">{{ s | round(1) }}</span>
+          </td>
+          <td>
+            <a href="/dashboard/{{ job.id }}">{{ job.title }}</a>
+            {% if not job.llm_evaluated %} <em class="muted">(pendiente LLM)</em>{% endif %}
+          </td>
+          <td>{{ job.company }}</td>
+          <td data-value="{{ job.source }}"><span class="badge {{ job.source }}">{{ job.source }}</span></td>
+          <td>{{ job.location }} ({{ job.remote_type }})</td>
+          <td data-value="{{ job.posted_at.isoformat() if job.posted_at else '' }}">{{ job.posted_at.strftime('%d/%m/%Y') if job.posted_at else '\u2014' }}</td>
+          <td data-value="{{ job.fetched_at.isoformat() if job.fetched_at else '' }}">{{ job.fetched_at.strftime('%d/%m/%Y %H:%M') if job.fetched_at else '\u2014' }}</td>
+          <td>{{ job.status }}</td>
+          <td><a href="{{ job.apply_link }}" target="_blank">Ver &rarr;</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if not jobs %}<p class="muted">Todavia no hay ofertas. El cron las ira anadiendo cada 4 horas.</p>{% endif %}
+</div>
 {% endif %}
 {% endblock %}

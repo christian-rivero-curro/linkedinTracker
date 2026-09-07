@@ -125,7 +125,7 @@ def parse_posted_at(value):
         return None
 
 
-def _process_job(conn, raw, profile, cutoff, errors) -> tuple[bool, object, bool]:
+def _process_job(conn, raw, profile, cutoff, errors, variant_id) -> tuple[bool, object, bool]:
     """
     Procesa una oferta cruda de JSearch dentro de la transaccion `conn`.
     Devuelve (es_fresca, posted_at, fue_insertada):
@@ -143,6 +143,9 @@ def _process_job(conn, raw, profile, cutoff, errors) -> tuple[bool, object, bool
        dura (metadata de fecha poco fiable en fuentes agregadas).
     2. Cutoff relativo por variante: evita reprocesar lo ya visto entre
        ejecuciones sucesivas de la MISMA variante.
+
+    variant_id se guarda en job_offer para saber que variante encontro la oferta
+    (visible y filtrable en el dashboard).
     """
     job = normalize_job(raw)
     if not job["external_id"] or not job["apply_link"]:
@@ -186,12 +189,12 @@ def _process_job(conn, raw, profile, cutoff, errors) -> tuple[bool, object, bool
     result = conn.execute(
         text("""
             INSERT INTO job_offer (external_id, title, company, location, remote_type,
-                description, apply_link, source, salary_min, salary_max, posted_at, embedding)
+                description, apply_link, source, salary_min, salary_max, posted_at, embedding, variant_id)
             VALUES (:external_id, :title, :company, :location, :remote_type,
-                :description, :apply_link, :source, :salary_min, :salary_max, :posted_at, CAST(:embedding AS vector))
+                :description, :apply_link, :source, :salary_min, :salary_max, :posted_at, CAST(:embedding AS vector), :variant_id)
             RETURNING id
         """),
-        {**job, "embedding": to_pgvector_literal(job_embedding)},
+        {**job, "embedding": to_pgvector_literal(job_embedding), "variant_id": variant_id},
     )
     job_offer_id = result.scalar()
 
@@ -276,7 +279,9 @@ def main():
                     page_has_fresh_job = False
                     with engine.begin() as conn:
                         for raw in raw_jobs:
-                            is_fresh, posted_at, was_inserted = _process_job(conn, raw, profile, cutoff, errors)
+                            is_fresh, posted_at, was_inserted = _process_job(
+                                conn, raw, profile, cutoff, errors, variant["id"]
+                            )
                             if posted_at is not None and (
                                 variant_newest_posted_at is None or posted_at > variant_newest_posted_at
                             ):

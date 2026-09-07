@@ -10,7 +10,8 @@
   </p>
   <p class="muted">
     Publicada: {{ detail.posted_at.strftime('%d/%m/%Y') if detail.posted_at else 'desconocida' }}
-    &middot; Anadida al sistema: {{ detail.fetched_at.strftime('%d/%m/%Y %H:%M') if detail.fetched_at else '\u2014' }}
+    &middot; Anadida al sistema: {{ detail.fetched_at.strftime('%d/%m/%Y %H:%M') if detail.fetched_at else '—' }}
+    &middot; Variante de busqueda: {{ detail.variant_query if detail.variant_query else '—' }}
   </p>
   <p>
     {% set s = detail.final_score %}
@@ -29,6 +30,9 @@
 {% else %}
 <div class="card">
   <h1>Ofertas rankeadas</h1>
+  <form method="post" action="/dashboard/clear-jobs" style="display:inline;" onsubmit="return confirm('¿Seguro que quieres eliminar TODAS las ofertas guardadas? Esta accion no se puede deshacer. No afecta a tu perfil ni a tus variantes de busqueda, pero reinicia su historial para que el proximo ciclo del cron vuelva a traer todo desde cero.');">
+    <button type="submit" style="background:#b91c1c;color:white;border:none;border-radius:4px;">Eliminar todas las ofertas</button>
+  </form>
   <div class="filters">
     <a href="/dashboard?status=all" class="{{ 'active' if status == 'all' else '' }}">Todas</a>
     <a href="/dashboard?status=new" class="{{ 'active' if status == 'new' else '' }}">Nuevas</a>
@@ -37,11 +41,20 @@
     <a href="/dashboard?status=discarded" class="{{ 'active' if status == 'discarded' else '' }}">Descartadas</a>
   </div>
   <p class="muted">
+    Filtrar por variante de busqueda:
+    <select onchange="location.href='/dashboard?status={{ status }}&show_skipped={{ '1' if show_skipped else '' }}&variant_id=' + this.value">
+      <option value="all" {{ 'selected' if variant_id == 'all' else '' }}>Todas las variantes</option>
+      {% for v in variants %}
+      <option value="{{ v.id }}" {{ 'selected' if variant_id == v.id|string else '' }}>{{ v.query_text }}</option>
+      {% endfor %}
+    </select>
+  </p>
+  <p class="muted">
     Solo se muestran ofertas que cumplen los requisitos duros de la descripcion (anios de experiencia, certificaciones, idioma...) segun la evaluacion del LLM.
     {% if show_skipped %}
-      <a href="/dashboard?status={{ status }}">Ocultar las que no cumplen requisitos</a>
+      <a href="/dashboard?status={{ status }}&variant_id={{ variant_id }}">Ocultar las que no cumplen requisitos</a>
     {% else %}
-      <a href="/dashboard?status={{ status }}&show_skipped=1">Ver tambien las que no cumplen requisitos (auditoria)</a>
+      <a href="/dashboard?status={{ status }}&show_skipped=1&variant_id={{ variant_id }}">Ver tambien las que no cumplen requisitos (auditoria)</a>
     {% endif %}
   </p>
   <p class="muted">Haz clic en cualquier cabecera de columna para ordenar la tabla.</p>
@@ -54,6 +67,7 @@
           <th class="sortable" data-type="text">Empresa</th>
           <th class="sortable" data-type="text">Fuente</th>
           <th class="sortable" data-type="text">Ubicacion</th>
+          <th class="sortable" data-type="text">Variante</th>
           <th class="sortable" data-type="date">Publicada</th>
           <th class="sortable" data-type="date">Anadida</th>
           <th class="sortable" data-type="text">Estado</th>
@@ -75,8 +89,15 @@
           <td>{{ job.company }}</td>
           <td data-value="{{ job.source }}"><span class="badge {{ job.source }}">{{ job.source }}</span></td>
           <td>{{ job.location }} ({{ job.remote_type }})</td>
-          <td data-value="{{ job.posted_at.isoformat() if job.posted_at else '' }}">{{ job.posted_at.strftime('%d/%m/%Y') if job.posted_at else '\u2014' }}</td>
-          <td data-value="{{ job.fetched_at.isoformat() if job.fetched_at else '' }}">{{ job.fetched_at.strftime('%d/%m/%Y %H:%M') if job.fetched_at else '\u2014' }}</td>
+          <td data-value="{{ job.variant_query or '' }}" title="{{ job.variant_query or '' }}">
+            {% if job.variant_query %}
+              <a href="/dashboard?status={{ status }}&show_skipped={{ '1' if show_skipped else '' }}&variant_id={{ job.variant_id }}">{{ job.variant_query | truncate(28) }}</a>
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+          </td>
+          <td data-value="{{ job.posted_at.isoformat() if job.posted_at else '' }}">{{ job.posted_at.strftime('%d/%m/%Y') if job.posted_at else '—' }}</td>
+          <td data-value="{{ job.fetched_at.isoformat() if job.fetched_at else '' }}">{{ job.fetched_at.strftime('%d/%m/%Y %H:%M') if job.fetched_at else '—' }}</td>
           <td>{{ job.status }}</td>
           <td><a href="{{ job.apply_link }}" target="_blank">Ver &rarr;</a></td>
         </tr>

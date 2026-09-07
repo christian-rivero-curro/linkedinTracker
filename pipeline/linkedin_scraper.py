@@ -5,8 +5,14 @@ IMPORTANTE: los selectores de DOM usados aqui son los documentados/observados
 a fecha de escritura de este modulo. LinkedIn cambia su HTML con cierta
 frecuencia; si scrape_variant() deja de encontrar tarjetas o descripcion, este
 es el primer sitio a revisar. Los logs de esta funcion estan pensados
-precisamente para detectar eso rapido: cuantas tarjetas ve el DOM, cuantas se
-descartan y por que.
+precisamente para detectar eso rapido.
+
+Si la navegacion falla o se queda a medias, se guarda un diagnostico
+(screenshot + titulo + primeros caracteres del HTML) en LINKEDIN_DIAGNOSTICS_DIR
+(por defecto linkedin_diagnostics/, montado como volumen de lectura-escritura
+en docker-compose.linkedin.yml) para poder ver EXACTAMENTE que esta mostrando
+LinkedIn en ese momento (challenge/verificacion, mobile redirect, etc.) en vez
+de especular a ciegas sobre la causa de un timeout.
 
 Disenado para minimizar senales de bot:
 - Reutiliza una sesion guardada (storage_state) en vez de loguearse cada vez.
@@ -19,9 +25,7 @@ default de Docker (64MB) suele quedarse corto. Por eso se lanza siempre con
 --disable-dev-shm-usage, ademas de ampliar shm_size en docker-compose.linkedin.yml.
 
 Nota sobre paginas: cada variante debe usar una pestana (page) NUEVA - ver
-run_linkedin_scrape.py. Reutilizar la misma pestana entre navegaciones
-sucesivas puede dejar una navegacion anterior a medias en segundo plano y
-provocar timeouts/abortos en cascada en las siguientes.
+run_linkedin_scrape.py.
 """
 import os
 import random
@@ -33,6 +37,7 @@ from urllib.parse import urlencode
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 STORAGE_STATE_PATH = os.environ.get("LINKEDIN_STORAGE_STATE", "linkedin_session/storage_state.json")
+DIAGNOSTICS_DIR = os.environ.get("LINKEDIN_DIAGNOSTICS_DIR", "linkedin_diagnostics")
 
 WORKPLACE_TYPE_MAP = {"remote": "2", "hybrid": "3", "onsite": "1"}
 
@@ -70,6 +75,32 @@ def _check_blocked(page):
         raise LinkedInBlockedError(f"LinkedIn redirigio a una pagina de bloqueo/login: {url}")
 
 
+def _save_diagnostics(page, label: str):
+    """Guarda screenshot + titulo + HTML parcial de la pagina en el momento del
+    fallo. Nunca lanza: un fallo capturando el diagnostico no debe tapar el
+    error original."""
+    try:
+        os.makedirs(DIAGNOSTICS_DIR, exist_ok=True)
+        safe_label = re.sub(r"[^a-zA-Z0-9_-]", "_", label)[:50]
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        screenshot_path = os.path.join(DIAGNOSTICS_DIR, f"{timestamp}_{safe_label}.png")
+        page.screenshot(path=screenshot_path)
+        _log(f"DIAGNOSTICO: screenshot guardado en {screenshot_path}")
+        try:
+            title = page.title()
+        except Exception:
+            title = "<no se pudo leer el titulo>"
+        _log(f"DIAGNOSTICO: titulo de la pagina = {title!r}")
+        _log(f"DIAGNOSTICO: URL actual = {page.url}")
+        try:
+            content_snippet = page.content()[:1500]
+            _log(f"DIAGNOSTICO: primeros 1500 caracteres del HTML:\n{content_snippet}")
+        except Exception as e:
+            _log(f"DIAGNOSTICO: no se pudo leer el HTML: {e}")
+    except Exception as e:
+        _log(f"DIAGNOSTICO: fallo capturando diagnostico: {e}")
+
+
 def build_search_url(query_text: str, location: str | None, remote_preference: str | None, hours_ago: int) -> str:
     params = {"keywords": query_text}
     if location:
@@ -82,9 +113,6 @@ def build_search_url(query_text: str, location: str | None, remote_preference: s
 
 
 def _parse_relative_posted_at(text_value: str | None):
-    """Best-effort: convierte 'Hace 3 horas' / '2 days ago' / '45 minutos' en
-    datetime UTC. Si no reconoce el formato, devuelve None (no critico, ya que
-    f_TPR garantiza la ventana temporal server-side)."""
     if not text_value:
         return None
     text_value = text_value.lower()
@@ -135,18 +163,30 @@ def scrape_variant(page, query_text: str, location: str | None, remote_preferenc
     Navega a la busqueda de LinkedIn para esta variante y devuelve una lista de
     dicts en el formato normalizado que espera pipeline/job_ingest.py.
 
-    IMPORTANTE: 'page' debe ser una pestana recien creada para esta variante
-    (ver run_linkedin_scrape.py). No reutilizar la misma pestana entre
-    variantes: deja navegaciones a medias que provocan timeouts/abortos en
-    cascada en las siguientes llamadas.
+    La espera de navegacion se hace en dos pasos: primero 'commit' (fires en
+    cuanto llega la respuesta HTTP, casi nunca cuelga) y luego
+    'domcontentloaded' por separado con manejo de error propio - asi, si el
+    DOM tarda mucho en completarse (challenge/verificacion de LinkedIn), aun
+    tenemos una pagina viva de la que sacar diagnostico en vez de perderla en
+    un unico timeout largo.
     """
     url = build_search_url(query_text, location, remote_preference, hours_ago)
     _log(f"URL de busqueda: {url}")
+
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
+        page.goto(url, wait_until="commit", timeout=NAVIGATION_TIMEOUT_MS)
     except PlaywrightTimeoutError:
-        raise TimeoutError(f"Timeout navegando a LinkedIn. Ultima URL alcanzada: {page.url}")
-    _log(f"Pagina cargada. URL final tras redirecciones: {page.url}")
+        _save_diagnostics(page, query_text)
+        raise TimeoutError(f"Timeout esperando 'commit' de la navegacion. Ultima URL alcanzada: {page.url}")
+    _log(f"Commit recibido. URL tras el commit: {page.url}")
+
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
+        _log("domcontentloaded alcanzado correctamente.")
+    except PlaywrightTimeoutError:
+        _save_diagnostics(page, query_text)
+        _log("AVISO: domcontentloaded no se alcanzo a tiempo; se continua igualmente con el DOM parcial disponible.")
+
     _random_delay(2, 4)
     _check_blocked(page)
 
@@ -155,10 +195,11 @@ def scrape_variant(page, query_text: str, location: str | None, remote_preferenc
         _log("Lista de resultados encontrada en el DOM.")
     except PlaywrightTimeoutError:
         _check_blocked(page)
+        _save_diagnostics(page, query_text)
         _log(
             "AVISO: no se encontro el contenedor de resultados "
             f"(selector actual: '{RESULTS_LIST_SELECTOR}'). Puede que LinkedIn haya cambiado el HTML, "
-            "o que la busqueda no tenga resultados para estos filtros. 0 ofertas para esta variante."
+            "que haya un challenge de verificacion, o que la busqueda no tenga resultados. 0 ofertas para esta variante."
         )
         return []
 

@@ -8,9 +8,11 @@ services:
     environment:
       LINKEDIN_HEADLESS: "true"
       LINKEDIN_STORAGE_STATE: /app/linkedin_session/storage_state.json
+      LINKEDIN_DIAGNOSTICS_DIR: /app/linkedin_diagnostics
       LINKEDIN_HOURS_AGO: "4"
       LINKEDIN_MAX_JOBS_PER_VARIANT: "25"
     shm_size: "2gb"
     volumes:
       - ./linkedin_session:/app/linkedin_session:ro
+      - ./linkedin_diagnostics:/app/linkedin_diagnostics
     command: ["python", "pipeline/run_linkedin_scrape.py"]

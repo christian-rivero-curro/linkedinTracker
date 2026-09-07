@@ -184,7 +184,7 @@ def dashboard(request: Request, status: str = "all", show_skipped: bool = False,
         FROM job_score js
         JOIN job_offer jo ON jo.id = js.job_offer_id
         LEFT JOIN search_query_variant sqv ON sqv.id = jo.variant_id
-        WHERE js.profile_id = 1
+        WHERE js.profile_id = 1 AND js.llm_evaluated = TRUE
     """
     params = {}
     if not show_skipped:
@@ -199,6 +199,9 @@ def dashboard(request: Request, status: str = "all", show_skipped: bool = False,
 
     with engine.connect() as conn:
         rows = conn.execute(text(query), params).mappings().all()
+        pending_llm_count = conn.execute(
+            text("SELECT COUNT(*) FROM job_score WHERE profile_id = 1 AND llm_evaluated = FALSE")
+        ).scalar()
 
     try:
         variants = get_all_variants(engine, profile_id=1)
@@ -215,6 +218,7 @@ def dashboard(request: Request, status: str = "all", show_skipped: bool = False,
             "show_skipped": show_skipped,
             "variant_id": variant_id,
             "variants": variants,
+            "pending_llm_count": pending_llm_count,
         },
     )
 

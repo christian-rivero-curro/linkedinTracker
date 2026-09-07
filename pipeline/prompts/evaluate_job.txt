@@ -13,12 +13,23 @@ Descripcion:
 
 Evalua el encaje real entre el perfil y la oferta. Se critico, no optimista: no infles la puntuacion solo porque haya coincidencias superficiales de palabras clave.
 
+Presta especial atencion a REQUISITOS DUROS explicitos que aparezcan literalmente en la descripcion de la oferta:
+- Anios minimos de experiencia (compara el total de anios del candidato, inferible de years_experience_by_skill y seniority en el perfil, contra lo que pide la oferta).
+- Titulacion academica obligatoria (no preferida, sino requerida).
+- Certificaciones profesionales obligatorias.
+- Idioma obligatorio que el candidato no hable segun el perfil.
+- Autorizacion legal para trabajar en el pais/region si se menciona como requisito excluyente.
+
+Si el perfil incumple CLARA y EXPLICITAMENTE alguno de estos requisitos duros (ejemplo: la oferta exige "10+ anios de experiencia" y el perfil tiene 3 anios; o exige un idioma que el candidato no habla), usa recommendation="skip" y explica exactamente la incompatibilidad en missing_requirements (ej. "Requiere 10+ anios de experiencia, el perfil tiene 3").
+
+NO uses "skip" por simples gaps de skills tecnicas blandas, tecnologias "nice to have", o preferencias no obligatorias — esos casos van en missing_requirements/cons pero corresponden a recommendation="consider" o "apply" segun el resto del encaje. Se conservador: solo bloquea con "skip" cuando el incumplimiento es duro, explicito y verificable en el texto de la oferta.
+
 Devuelve UNICAMENTE un JSON valido (sin texto adicional, sin markdown, sin backticks) con este esquema exacto:
 
 {{
   "score": numero_entre_0_y_100,
   "pros": ["motivos concretos por los que el perfil encaja"],
   "cons": ["motivos concretos por los que el perfil no encaja o riesgos"],
-  "missing_requirements": ["requisitos de la oferta que el perfil no cumple"],
+  "missing_requirements": ["requisitos de la oferta que el perfil no cumple, incluyendo cualquier requisito duro explicito incumplido"],
   "recommendation": "apply" | "consider" | "skip"
 }}

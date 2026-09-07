@@ -1,6 +1,13 @@
 """
-Entrypoint del cron (GitHub Actions, cada 4h).
-Orquesta todo el pipeline de descubrimiento y scoring de ofertas.
+Entrypoint del cron de DESCUBRIMIENTO (GitHub Actions, cada 4h).
+Solo busca ofertas en JSearch y las guarda en la base de datos con su
+similitud vectorial. La evaluacion cualitativa por LLM vive en un script
+aparte (pipeline/run_llm_evaluation.py), que corre cada 5 minutos de forma
+independiente: JSearch tiene una cuota mensual real y limitada, por lo que
+ese descubrimiento debe seguir siendo espaciado; el LLM usado es un modelo
+:free de OpenRouter sin limite diario real en la cuenta actual, asi que no
+tiene sentido atarlo a la misma cadencia de 4h - conviene evaluar el backlog
+lo antes posible.
 
 Cada ejecucion consulta TODAS las variantes de busqueda activas (no una sola
 por rotacion), y por cada variante pagina hasta JSEARCH_MAX_PAGES_PER_VARIANT
@@ -17,13 +24,6 @@ fuentes de terceros con metadata de fecha poco fiable (date_posted='month' no
 es una garantia dura), se aplica ademas JSEARCH_MAX_JOB_AGE_DAYS como techo
 ABSOLUTO de antiguedad, independiente del cutoff.
 
-Evaluacion LLM por variante (no un ranking global unico): cada variante de
-busqueda obtiene su propio cupo de hasta LLM_TOP_N_PER_VARIANT candidatas
-(las de mayor similitud vectorial pendientes de evaluar), y las candidatas de
-todas las variantes se recorren en round-robin. Esto evita que una variante
-muy productiva monopolice todo el LLM_DAILY_BUDGET a costa de dejar sin
-evaluar ofertas de otras variantes mas nicho pero igual de relevantes.
-
 Fail-soft: nunca debe terminar con excepcion no controlada, incluida la
 lectura de configuracion (variables de entorno mal escritas usan su default
 en vez de tumbar el modulo entero al importarlo).
@@ -31,7 +31,6 @@ en vez de tumbar el modulo entero al importarlo).
 import os
 import sys
 import traceback
-from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
@@ -44,12 +43,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.db import get_engine  # noqa: E402
 from pipeline.jsearch_client import search_jobs, normalize_job  # noqa: E402
 from pipeline.embeddings import embed_text, cosine_similarity, to_pgvector_literal, parse_pgvector  # noqa: E402
-from pipeline.scoring import (  # noqa: E402
-    is_blacklisted,
-    hard_requirements_score,
-    evaluate_job_with_llm,
-    compute_final_score,
-)
+from pipeline.scoring import is_blacklisted  # noqa: E402
 from pipeline.query_variants import get_or_seed_variants, mark_variant_run  # noqa: E402
 
 
@@ -71,28 +65,20 @@ def _int_env(name: str, default: int) -> int:
 
 
 JSEARCH_MONTHLY_BUDGET = _int_env("JSEARCH_MONTHLY_BUDGET", 180)
-LLM_DAILY_BUDGET = _int_env("LLM_DAILY_BUDGET", 48)
-LLM_TOP_N_PER_VARIANT = max(1, _int_env("LLM_TOP_N_PER_VARIANT", 10))
-VECTOR_SIMILARITY_THRESHOLD = 0.55
 MAX_PAGES_PER_VARIANT = max(1, _int_env("JSEARCH_MAX_PAGES_PER_VARIANT", 3))
 JSEARCH_PAGE_SIZE_HINT = 10  # heuristica: una pagina con menos resultados que esto se asume la ultima
 MAX_JOB_AGE_DAYS = max(1, _int_env("JSEARCH_MAX_JOB_AGE_DAYS", 35))
 
 
-def check_budget(engine) -> tuple[bool, int, int]:
+def check_budget(engine) -> tuple[bool, int]:
     with engine.connect() as conn:
         since_month = datetime.now(timezone.utc) - timedelta(days=30)
         jsearch_used = conn.execute(
             text("SELECT COALESCE(SUM(jsearch_calls_used),0) FROM run_log WHERE started_at >= :since"),
             {"since": since_month},
         ).scalar()
-        since_day = datetime.now(timezone.utc) - timedelta(days=1)
-        llm_used = conn.execute(
-            text("SELECT COALESCE(SUM(llm_calls_used),0) FROM run_log WHERE started_at >= :since"),
-            {"since": since_day},
-        ).scalar()
     can_run = jsearch_used < JSEARCH_MONTHLY_BUDGET
-    return can_run, jsearch_used, llm_used
+    return can_run, jsearch_used
 
 
 def load_profile(engine) -> dict | None:
@@ -153,8 +139,8 @@ def _process_job(conn, raw, profile, cutoff, errors, variant_id) -> tuple[bool, 
        ejecuciones sucesivas de la MISMA variante.
 
     variant_id se guarda en job_offer para saber que variante encontro la oferta
-    (visible y filtrable en el dashboard, y usado luego para repartir el cupo
-    de evaluacion LLM de forma independiente por variante).
+    (visible y filtrable en el dashboard, y usado por run_llm_evaluation.py
+    para el reparto de la evaluacion LLM).
     """
     job = normalize_job(raw)
     if not job["external_id"] or not job["apply_link"]:
@@ -218,50 +204,10 @@ def _process_job(conn, raw, profile, cutoff, errors, variant_id) -> tuple[bool, 
     return True, posted_at, True
 
 
-def _fetch_pending_for_llm_round_robin(conn):
-    """
-    Selecciona candidatas pendientes de evaluar por LLM, con hasta
-    LLM_TOP_N_PER_VARIANT por variante (ranking independiente por variante via
-    ROW_NUMBER), y las devuelve intercaladas en round-robin entre variantes
-    (primera candidata de cada variante, luego la segunda de cada una, etc.).
-
-    Esto asegura que, si el LLM_DAILY_BUDGET no alcanza para evaluar todo el
-    cupo, el recorte afecte por igual a todas las variantes activas en vez de
-    agotarse siempre en la primera variante de la lista.
-    """
-    ranked = conn.execute(
-        text("""
-            SELECT * FROM (
-                SELECT js.id AS score_id, js.job_offer_id, js.vector_similarity, jo.*,
-                       ROW_NUMBER() OVER (PARTITION BY jo.variant_id ORDER BY js.vector_similarity DESC) AS rn
-                FROM job_score js
-                JOIN job_offer jo ON jo.id = js.job_offer_id
-                WHERE js.llm_evaluated = FALSE AND js.vector_similarity >= :threshold
-            ) ranked
-            WHERE rn <= :limit
-            ORDER BY ranked.variant_id NULLS LAST, rn
-        """),
-        {"threshold": VECTOR_SIMILARITY_THRESHOLD, "limit": LLM_TOP_N_PER_VARIANT},
-    ).mappings().all()
-
-    grouped = defaultdict(deque)
-    for row in ranked:
-        grouped[row["variant_id"]].append(row)
-
-    interleaved = []
-    while grouped:
-        for vid in list(grouped.keys()):
-            interleaved.append(grouped[vid].popleft())
-            if not grouped[vid]:
-                del grouped[vid]
-    return interleaved
-
-
 def main():
     engine = get_engine()
     started_at = datetime.now(timezone.utc)
     jsearch_calls = 0
-    llm_calls = 0
     new_jobs_found = 0
     errors = []
 
@@ -271,7 +217,7 @@ def main():
             errors.append("No hay perfil configurado (profile.id=1). Completa el onboarding primero.")
             return
 
-        can_run, jsearch_used_month, llm_used_today = check_budget(engine)
+        can_run, jsearch_used_month = check_budget(engine)
         if not can_run:
             errors.append(f"Presupuesto JSearch agotado ({jsearch_used_month}/{JSEARCH_MONTHLY_BUDGET} este mes).")
             return
@@ -352,69 +298,30 @@ def main():
                 except Exception as e:
                     errors.append(f"Error actualizando cutoff de variante {variant.get('id')}: {e}")
 
-        with engine.begin() as conn:
-            pending = _fetch_pending_for_llm_round_robin(conn)
-
-            for row in pending:
-                if llm_used_today + llm_calls >= LLM_DAILY_BUDGET:
-                    errors.append(
-                        f"Presupuesto LLM diario agotado tras {llm_calls} llamadas en esta ejecucion; "
-                        f"quedan {len(pending) - pending.index(row)} candidatas pendientes para la proxima ejecucion."
-                    )
-                    break
-                try:
-                    evaluation = evaluate_job_with_llm(profile["extracted_json"], dict(row))
-                    llm_calls += 1
-                except Exception as e:
-                    errors.append(f"LLM error en job {row['job_offer_id']}: {e}")
-                    continue
-
-                hard_score = hard_requirements_score(profile, dict(row))
-                final_score = compute_final_score(row["vector_similarity"], hard_score, evaluation["llm_score"])
-
-                conn.execute(
-                    text("""
-                        UPDATE job_score SET llm_score = :llm_score, llm_evaluated = TRUE,
-                            pros = :pros, cons = :cons, missing_requirements = :missing,
-                            recommendation = :recommendation, final_score = :final_score
-                        WHERE id = :score_id
-                    """),
-                    {
-                        "llm_score": evaluation["llm_score"],
-                        "pros": evaluation["pros"],
-                        "cons": evaluation["cons"],
-                        "missing": evaluation["missing_requirements"],
-                        "recommendation": evaluation["recommendation"],
-                        "final_score": final_score,
-                        "score_id": row["score_id"],
-                    },
-                )
-
     except Exception:
         errors.append(traceback.format_exc())
     finally:
-        _log_run(engine, started_at, jsearch_calls, llm_calls, new_jobs_found, errors)
+        _log_run(engine, started_at, jsearch_calls, new_jobs_found, errors)
 
 
-def _log_run(engine, started_at, jsearch_calls, llm_calls, new_jobs_found, errors):
+def _log_run(engine, started_at, jsearch_calls, new_jobs_found, errors):
     with engine.begin() as conn:
         conn.execute(
             text("""
                 INSERT INTO run_log (started_at, finished_at, jsearch_calls_used, llm_calls_used, new_jobs_found, errors)
-                VALUES (:started_at, :finished_at, :jsearch_calls, :llm_calls, :new_jobs_found, :errors)
+                VALUES (:started_at, :finished_at, :jsearch_calls, 0, :new_jobs_found, :errors)
             """),
             {
                 "started_at": started_at,
                 "finished_at": datetime.now(timezone.utc),
                 "jsearch_calls": jsearch_calls,
-                "llm_calls": llm_calls,
                 "new_jobs_found": new_jobs_found,
                 "errors": "\n".join(errors) if errors else None,
             },
         )
     if errors:
         print("Errores durante la ejecucion:", *errors, sep="\n")
-    print(f"Ejecucion finalizada. Ofertas nuevas: {new_jobs_found}. JSearch calls: {jsearch_calls}. LLM calls: {llm_calls}.")
+    print(f"Ejecucion finalizada. Ofertas nuevas: {new_jobs_found}. JSearch calls: {jsearch_calls}.")
 
 
 if __name__ == "__main__":

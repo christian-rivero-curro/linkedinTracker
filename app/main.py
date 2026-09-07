@@ -177,22 +177,27 @@ def generate_variants():
 def _parse_bool_param(value: str) -> bool:
     """
     Convierte un parametro de query string en booleano de forma tolerante.
-    Los enlaces/formularios del dashboard a veces generan show_skipped='' (vacio)
-    en vez de omitir el parametro; con bool nativo de FastAPI eso da un 422.
-    Cualquier valor vacio, '0' o 'false' (case-insensitive) se trata como False;
-    el resto (incluido '1', 'true', 'on') se trata como True.
+    Cualquier valor vacio, '0' o 'false' (case-insensitive) se trata como
+    False; el resto (incluido '1', 'true', 'on') se trata como True.
     """
     return value.strip().lower() not in ("", "0", "false", "no")
 
 
 @app.get("/dashboard")
-def dashboard(request: Request, status: str = "all", show_skipped: str = "", variant_id: str = "all"):
+def dashboard(
+    request: Request,
+    status: str = "all",
+    show_skipped: str = "",
+    show_discarded: str = "",
+    variant_id: str = "all",
+):
     show_skipped_bool = _parse_bool_param(show_skipped)
+    show_discarded_bool = _parse_bool_param(show_discarded)
     engine = get_engine()
     query = """
         SELECT js.id, jo.title, jo.company, jo.location, jo.remote_type, jo.apply_link,
                jo.source, jo.posted_at, jo.fetched_at, jo.variant_id, sqv.query_text AS variant_query,
-               js.final_score, js.llm_score, js.status, js.llm_evaluated, js.recommendation
+               js.final_score, js.llm_score, js.status, js.llm_evaluated, js.recommendation, js.discard_reason
         FROM job_score js
         JOIN job_offer jo ON jo.id = js.job_offer_id
         LEFT JOIN search_query_variant sqv ON sqv.id = jo.variant_id
@@ -204,6 +209,8 @@ def dashboard(request: Request, status: str = "all", show_skipped: str = "", var
     if status != "all":
         query += " AND js.status = :status"
         params["status"] = status
+    elif not show_discarded_bool:
+        query += " AND js.status != 'discarded'"
     if variant_id != "all" and variant_id.strip().isdigit():
         query += " AND jo.variant_id = :variant_id"
         params["variant_id"] = int(variant_id)
@@ -228,6 +235,7 @@ def dashboard(request: Request, status: str = "all", show_skipped: str = "", var
             "jobs": rows,
             "status": status,
             "show_skipped": show_skipped_bool,
+            "show_discarded": show_discarded_bool,
             "variant_id": variant_id,
             "variants": variants,
             "pending_llm_count": pending_llm_count,
@@ -274,11 +282,19 @@ def clear_jobs():
 
 @app.post("/api/job/{job_score_id}/status")
 def update_job_status(job_score_id: int, payload: JobStatusUpdate):
+    """
+    Actualiza el estado de una oferta. Las ofertas descartadas NO se borran,
+    solo cambian de status a 'discarded' (se ocultan de la tabla por defecto,
+    ver /dashboard?show_discarded=1). El motivo es opcional y se persiste en
+    discard_reason; si el estado deja de ser 'discarded', se limpia el motivo
+    porque ya no aplica.
+    """
+    discard_reason = payload.reason.strip() if (payload.status == "discarded" and payload.reason) else None
     engine = get_engine()
     with engine.begin() as conn:
         conn.execute(
-            text("UPDATE job_score SET status = :status WHERE id = :id"),
-            {"status": payload.status, "id": job_score_id},
+            text("UPDATE job_score SET status = :status, discard_reason = :discard_reason WHERE id = :id"),
+            {"status": payload.status, "discard_reason": discard_reason, "id": job_score_id},
         )
     return {"ok": True}
 

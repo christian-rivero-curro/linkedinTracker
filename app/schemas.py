@@ -13,3 +13,4 @@ class OnboardingRequest(BaseModel):
 
 class JobStatusUpdate(BaseModel):
     status: str
+    reason: Optional[str] = None

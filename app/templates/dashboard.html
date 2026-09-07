@@ -6,6 +6,7 @@
   <p>
     <span class="badge {{ detail.source }}">{{ detail.source }}</span>
     {% if detail.recommendation == 'skip' %}<span class="badge" style="background:#fee2e2;color:#b91c1c;">no cumple requisitos</span>{% endif %}
+    {% if detail.status == 'discarded' %}<span class="badge" style="background:#e5e7eb;color:#374151;">descartada</span>{% endif %}
     {{ detail.location }} &middot; {{ detail.remote_type }}
   </p>
   <p class="muted">
@@ -13,6 +14,9 @@
     &middot; Anadida al sistema: {{ detail.fetched_at.strftime('%d/%m/%Y %H:%M') if detail.fetched_at else '—' }}
     &middot; Variante de busqueda: {{ detail.variant_query if detail.variant_query else '—' }}
   </p>
+  {% if detail.status == 'discarded' and detail.discard_reason %}
+  <p class="muted"><strong>Motivo del descarte:</strong> {{ detail.discard_reason }}</p>
+  {% endif %}
   <p>
     {% set s = detail.final_score %}
     <span class="score-pill {{ 'score-high' if s >= 75 else ('score-mid' if s >= 50 else 'score-low') }}">{{ s | round(1) }}</span>
@@ -36,7 +40,7 @@
   <p class="muted">
     Solo se listan aqui ofertas que ya tienen un resumen del LLM (pros, contras y requisitos evaluados) y que cumplen razonablemente los requisitos del puesto.
     {% if pending_llm_count and pending_llm_count > 0 %}
-      Hay <strong>{{ pending_llm_count }}</strong> oferta{{ 's' if pending_llm_count != 1 else '' }} nueva{{ 's' if pending_llm_count != 1 else '' }} en cola de evaluacion; apareceran aqui en cuanto el cron las procese (cada 4 horas, en tandas limitadas por el presupuesto diario del LLM).
+      Hay <strong>{{ pending_llm_count }}</strong> oferta{{ 's' if pending_llm_count != 1 else '' }} nueva{{ 's' if pending_llm_count != 1 else '' }} en cola de evaluacion; apareceran aqui en cuanto el cron las procese.
     {% endif %}
   </p>
   <div class="filters">
@@ -48,7 +52,7 @@
   </div>
   <p class="muted">
     Filtrar por variante de busqueda:
-    <select onchange="location.href='/dashboard?status={{ status }}{{ '&show_skipped=1' if show_skipped else '' }}&variant_id=' + this.value">
+    <select onchange="location.href='/dashboard?status={{ status }}{{ '&show_skipped=1' if show_skipped else '' }}{{ '&show_discarded=1' if show_discarded else '' }}&variant_id=' + this.value">
       <option value="all" {{ 'selected' if variant_id == 'all' else '' }}>Todas las variantes</option>
       {% for v in variants %}
       <option value="{{ v.id }}" {{ 'selected' if variant_id == v.id|string else '' }}>{{ v.query_text }}</option>
@@ -58,11 +62,21 @@
   <p class="muted">
     Solo se muestran ofertas que cumplen los requisitos duros de la descripcion (anios de experiencia, certificaciones, idioma...) segun la evaluacion del LLM.
     {% if show_skipped %}
-      <a href="/dashboard?status={{ status }}&variant_id={{ variant_id }}">Ocultar las que no cumplen requisitos</a>
+      <a href="/dashboard?status={{ status }}&variant_id={{ variant_id }}{{ '&show_discarded=1' if show_discarded else '' }}">Ocultar las que no cumplen requisitos</a>
     {% else %}
-      <a href="/dashboard?status={{ status }}&show_skipped=1&variant_id={{ variant_id }}">Ver tambien las que no cumplen requisitos (auditoria)</a>
+      <a href="/dashboard?status={{ status }}&show_skipped=1&variant_id={{ variant_id }}{{ '&show_discarded=1' if show_discarded else '' }}">Ver tambien las que no cumplen requisitos (auditoria)</a>
     {% endif %}
   </p>
+  {% if status == 'all' %}
+  <p class="muted">
+    Las ofertas descartadas se ocultan por defecto (no se borran).
+    {% if show_discarded %}
+      <a href="/dashboard?status={{ status }}&variant_id={{ variant_id }}{{ '&show_skipped=1' if show_skipped else '' }}">Ocultar descartadas</a>
+    {% else %}
+      <a href="/dashboard?status={{ status }}&show_discarded=1&variant_id={{ variant_id }}{{ '&show_skipped=1' if show_skipped else '' }}">Ver tambien las descartadas</a>
+    {% endif %}
+  </p>
+  {% endif %}
   <p class="muted">Haz clic en cualquier cabecera de columna para ordenar la tabla.</p>
   <div class="table-wrap">
     <table class="sortable">
@@ -78,11 +92,12 @@
           <th class="sortable" data-type="date">Anadida</th>
           <th class="sortable" data-type="text">Estado</th>
           <th>Enlace</th>
+          <th>Acciones</th>
         </tr>
       </thead>
       <tbody>
         {% for job in jobs %}
-        <tr>
+        <tr id="job-row-{{ job.id }}">
           <td data-value="{{ job.final_score }}">
             {% set s = job.final_score %}
             <span class="score-pill {{ 'score-high' if s >= 75 else ('score-mid' if s >= 50 else 'score-low') }}">{{ s | round(1) }}</span>
@@ -90,13 +105,14 @@
           <td>
             <a href="/dashboard/{{ job.id }}">{{ job.title }}</a>
             {% if job.recommendation == 'skip' %} <span class="badge" style="background:#fee2e2;color:#b91c1c;">no cumple requisitos</span>{% endif %}
+            {% if job.status == 'discarded' %} <span class="badge" style="background:#e5e7eb;color:#374151;" title="{{ job.discard_reason or 'Sin motivo' }}">descartada</span>{% endif %}
           </td>
           <td>{{ job.company }}</td>
           <td data-value="{{ job.source }}"><span class="badge {{ job.source }}">{{ job.source }}</span></td>
           <td>{{ job.location }} ({{ job.remote_type }})</td>
           <td data-value="{{ job.variant_query or '' }}" title="{{ job.variant_query or '' }}">
             {% if job.variant_query %}
-              <a href="/dashboard?status={{ status }}{{ '&show_skipped=1' if show_skipped else '' }}&variant_id={{ job.variant_id }}">{{ job.variant_query | truncate(28) }}</a>
+              <a href="/dashboard?status={{ status }}{{ '&show_skipped=1' if show_skipped else '' }}{{ '&show_discarded=1' if show_discarded else '' }}&variant_id={{ job.variant_id }}">{{ job.variant_query | truncate(28) }}</a>
             {% else %}
               <span class="muted">—</span>
             {% endif %}
@@ -105,12 +121,51 @@
           <td data-value="{{ job.fetched_at.isoformat() if job.fetched_at else '' }}">{{ job.fetched_at.strftime('%d/%m/%Y %H:%M') if job.fetched_at else '—' }}</td>
           <td>{{ job.status }}</td>
           <td><a href="{{ job.apply_link }}" target="_blank">Ver &rarr;</a></td>
+          <td>
+            {% if job.status != 'discarded' %}
+              <button type="button" onclick="discardJob({{ job.id }})" style="background:#e5e7eb;color:#374151;border:none;border-radius:4px;padding:0.2rem 0.6rem;cursor:pointer;">Descartar</button>
+            {% else %}
+              <button type="button" onclick="restoreJob({{ job.id }})" style="background:#eef2ff;color:#3730a3;border:none;border-radius:4px;padding:0.2rem 0.6rem;cursor:pointer;">Restaurar</button>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
-  {% if not jobs %}<p class="muted">Todavia no hay ofertas evaluadas. El cron las ira anadiendo y evaluando cada 4 horas.</p>{% endif %}
+  {% if not jobs %}<p class="muted">Todavia no hay ofertas evaluadas (o todas estan filtradas/ocultas). El cron las ira anadiendo y evaluando cada 4 horas.</p>{% endif %}
 </div>
+<script>
+function discardJob(id) {
+  const reason = prompt('Motivo del descarte (opcional, deja vacio para descartar sin motivo):');
+  if (reason === null) return;
+  fetch('/api/job/' + id + '/status', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({status: 'discarded', reason: reason.trim() || null})
+  }).then(function(resp) {
+    if (resp.ok) {
+      const row = document.getElementById('job-row-' + id);
+      if (row) row.remove();
+    } else {
+      alert('No se pudo descartar la oferta.');
+    }
+  });
+}
+
+function restoreJob(id) {
+  fetch('/api/job/' + id + '/status', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({status: 'new', reason: null})
+  }).then(function(resp) {
+    if (resp.ok) {
+      location.reload();
+    } else {
+      alert('No se pudo restaurar la oferta.');
+    }
+  });
+}
+</script>
 {% endif %}
 {% endblock %}

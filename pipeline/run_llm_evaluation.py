@@ -11,6 +11,11 @@ pausa es evitar el rate-limit POR MINUTO del proveedor, por eso se deja
 LLM_CALL_DELAY_SECONDS (default 2s) entre llamada y llamada - es un margen de
 seguridad frente a ese rate-limit, no un intento de ahorrar coste.
 
+No se filtra por vector_similarity: TODA oferta pendiente debe acabar teniendo
+un resumen del LLM (norma del producto), simplemente se prioriza por mayor
+similitud vectorial primero dentro de cada tanda. Un filtro de similitud
+minima tenia sentido cuando el LLM era un recurso escaso/de pago; ya no lo es.
+
 LLM_MAX_CALLS_PER_RUN actua como valvula de seguridad para que una sola
 ejecucion no se alargue indefinidamente (por ejemplo si hay un backlog
 enorme) y quede dentro del timeout del job de GitHub Actions; lo que no
@@ -60,7 +65,6 @@ def _int_env(name: str, default: int) -> int:
 
 LLM_CALL_DELAY_SECONDS = max(0.0, _float_env("LLM_CALL_DELAY_SECONDS", 2.0))
 LLM_MAX_CALLS_PER_RUN = max(1, _int_env("LLM_MAX_CALLS_PER_RUN", 100))
-VECTOR_SIMILARITY_THRESHOLD = 0.55
 
 
 def load_profile(engine) -> dict | None:
@@ -91,11 +95,11 @@ def main():
                     SELECT js.id AS score_id, js.job_offer_id, js.vector_similarity, jo.*
                     FROM job_score js
                     JOIN job_offer jo ON jo.id = js.job_offer_id
-                    WHERE js.llm_evaluated = FALSE AND js.vector_similarity >= :threshold
+                    WHERE js.llm_evaluated = FALSE
                     ORDER BY js.vector_similarity DESC
                     LIMIT :limit
                 """),
-                {"threshold": VECTOR_SIMILARITY_THRESHOLD, "limit": LLM_MAX_CALLS_PER_RUN},
+                {"limit": LLM_MAX_CALLS_PER_RUN},
             ).mappings().all()
 
         if not pending:

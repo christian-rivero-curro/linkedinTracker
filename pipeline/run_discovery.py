@@ -24,6 +24,11 @@ fuentes de terceros con metadata de fecha poco fiable (date_posted='month' no
 es una garantia dura), se aplica ademas JSEARCH_MAX_JOB_AGE_DAYS como techo
 ABSOLUTO de antiguedad, independiente del cutoff.
 
+Solo se guardan ofertas cuyo publisher se clasifique como LinkedIn
+(REQUIRED_SOURCE). jsearch_client.py ya pide "via linkedin" en la query, pero
+eso no es una garantia estricta de la API - este es el filtro de seguridad
+que realmente asegura que solo entren ofertas de LinkedIn a la base de datos.
+
 Fail-soft: nunca debe terminar con excepcion no controlada, incluida la
 lectura de configuracion (variables de entorno mal escritas usan su default
 en vez de tumbar el modulo entero al importarlo).
@@ -64,10 +69,17 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _str_env(name: str, default: str) -> str:
+    value = os.environ.get(name, "").strip()
+    return value if value else default
+
+
 JSEARCH_MONTHLY_BUDGET = _int_env("JSEARCH_MONTHLY_BUDGET", 180)
 MAX_PAGES_PER_VARIANT = max(1, _int_env("JSEARCH_MAX_PAGES_PER_VARIANT", 3))
 JSEARCH_PAGE_SIZE_HINT = 10  # heuristica: una pagina con menos resultados que esto se asume la ultima
 MAX_JOB_AGE_DAYS = max(1, _int_env("JSEARCH_MAX_JOB_AGE_DAYS", 35))
+# Debe coincidir con JSEARCH_SOURCE_FILTER de jsearch_client.py. Vacio = sin filtro (acepta cualquier fuente).
+REQUIRED_SOURCE = os.environ.get("JSEARCH_SOURCE_FILTER", "linkedin").strip().lower()
 
 
 def check_budget(engine) -> tuple[bool, int]:
@@ -130,13 +142,17 @@ def _process_job(conn, raw, profile, cutoff, errors, variant_id) -> tuple[bool, 
     No lanza excepciones de negocio: los fallos puntuales (embedding, etc.)
     se registran en `errors` y la oferta se salta sin insertar.
 
-    Aplica dos filtros de fecha distintos:
+    Aplica varios filtros antes de insertar:
     1. Techo absoluto (MAX_JOB_AGE_DAYS): descarta ofertas demasiado viejas
        SIEMPRE, incluso en la primera ejecucion de una variante (cutoff=None).
        Necesario porque el date_posted='month' de la API no es una garantia
        dura (metadata de fecha poco fiable en fuentes agregadas).
     2. Cutoff relativo por variante: evita reprocesar lo ya visto entre
        ejecuciones sucesivas de la MISMA variante.
+    3. REQUIRED_SOURCE: si esta configurado (por defecto 'linkedin'), descarta
+       cualquier oferta cuyo publisher no se haya clasificado como esa fuente.
+       Esta oferta SI cuenta como "vista"/fresca a efectos de paginacion y
+       cutoff, para no reintentar buscarla en cada ejecucion.
 
     variant_id se guarda en job_offer para saber que variante encontro la oferta
     (visible y filtrable en el dashboard, y usado por run_llm_evaluation.py
@@ -156,6 +172,9 @@ def _process_job(conn, raw, profile, cutoff, errors, variant_id) -> tuple[bool, 
     is_fresh = cutoff is None or posted_at is None or posted_at > cutoff
     if not is_fresh:
         return False, posted_at, False
+
+    if REQUIRED_SOURCE and job["source"] != REQUIRED_SOURCE:
+        return True, posted_at, False
 
     if is_blacklisted(job["title"]) and not any(
         kw in job["title"].lower() for kw in profile.get("role_family", [])

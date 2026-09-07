@@ -175,14 +175,15 @@ def generate_variants():
 
 
 @app.get("/dashboard")
-def dashboard(request: Request, status: str = "all", show_skipped: bool = False):
+def dashboard(request: Request, status: str = "all", show_skipped: bool = False, variant_id: str = "all"):
     engine = get_engine()
     query = """
         SELECT js.id, jo.title, jo.company, jo.location, jo.remote_type, jo.apply_link,
-               jo.source, jo.posted_at, jo.fetched_at, js.final_score, js.llm_score,
-               js.status, js.llm_evaluated, js.recommendation
+               jo.source, jo.posted_at, jo.fetched_at, jo.variant_id, sqv.query_text AS variant_query,
+               js.final_score, js.llm_score, js.status, js.llm_evaluated, js.recommendation
         FROM job_score js
         JOIN job_offer jo ON jo.id = js.job_offer_id
+        LEFT JOIN search_query_variant sqv ON sqv.id = jo.variant_id
         WHERE js.profile_id = 1
     """
     params = {}
@@ -191,13 +192,30 @@ def dashboard(request: Request, status: str = "all", show_skipped: bool = False)
     if status != "all":
         query += " AND js.status = :status"
         params["status"] = status
+    if variant_id != "all" and variant_id.strip().isdigit():
+        query += " AND jo.variant_id = :variant_id"
+        params["variant_id"] = int(variant_id)
     query += " ORDER BY js.final_score DESC LIMIT 100"
 
     with engine.connect() as conn:
         rows = conn.execute(text(query), params).mappings().all()
+
+    try:
+        variants = get_all_variants(engine, profile_id=1)
+    except Exception as e:
+        print(f"[dashboard] No se pudieron leer las variantes de busqueda: {e}")
+        variants = []
+
     return templates.TemplateResponse(
         "dashboard.html",
-        {"request": request, "jobs": rows, "status": status, "show_skipped": show_skipped},
+        {
+            "request": request,
+            "jobs": rows,
+            "status": status,
+            "show_skipped": show_skipped,
+            "variant_id": variant_id,
+            "variants": variants,
+        },
     )
 
 
@@ -208,14 +226,34 @@ def dashboard_detail(request: Request, job_score_id: int):
         row = conn.execute(
             text("""
                 SELECT js.*, jo.title, jo.company, jo.location, jo.remote_type,
-                       jo.description, jo.apply_link, jo.source, jo.posted_at, jo.fetched_at
+                       jo.description, jo.apply_link, jo.source, jo.posted_at, jo.fetched_at,
+                       jo.variant_id, sqv.query_text AS variant_query
                 FROM job_score js
                 JOIN job_offer jo ON jo.id = js.job_offer_id
+                LEFT JOIN search_query_variant sqv ON sqv.id = jo.variant_id
                 WHERE js.id = :id
             """),
             {"id": job_score_id},
         ).mappings().first()
     return templates.TemplateResponse("dashboard.html", {"request": request, "detail": row, "jobs": []})
+
+
+@app.post("/dashboard/clear-jobs")
+def clear_jobs():
+    """
+    Elimina TODAS las ofertas guardadas (job_offer, y en cascada job_score),
+    sin tocar el perfil ni las variantes de busqueda. Resetea el cutoff de cada
+    variante (last_posted_cutoff_utc y last_run_at a NULL) para que la proxima
+    ejecucion del cron repueble desde cero en vez de filtrar por una fecha ya
+    obsoleta que ya no corresponde a ningun dato guardado.
+    """
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM job_offer"))
+        conn.execute(
+            text("UPDATE search_query_variant SET last_posted_cutoff_utc = NULL, last_run_at = NULL WHERE profile_id = 1")
+        )
+    return RedirectResponse(url="/dashboard", status_code=303)
 
 
 @app.post("/api/job/{job_score_id}/status")

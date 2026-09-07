@@ -175,16 +175,19 @@ def generate_variants():
 
 
 @app.get("/dashboard")
-def dashboard(request: Request, status: str = "all"):
+def dashboard(request: Request, status: str = "all", show_skipped: bool = False):
     engine = get_engine()
     query = """
         SELECT js.id, jo.title, jo.company, jo.location, jo.remote_type, jo.apply_link,
-               jo.source, jo.posted_at, jo.fetched_at, js.final_score, js.llm_score, js.status, js.llm_evaluated
+               jo.source, jo.posted_at, jo.fetched_at, js.final_score, js.llm_score,
+               js.status, js.llm_evaluated, js.recommendation
         FROM job_score js
         JOIN job_offer jo ON jo.id = js.job_offer_id
         WHERE js.profile_id = 1
     """
     params = {}
+    if not show_skipped:
+        query += " AND COALESCE(js.recommendation, 'consider') != 'skip'"
     if status != "all":
         query += " AND js.status = :status"
         params["status"] = status
@@ -192,7 +195,10 @@ def dashboard(request: Request, status: str = "all"):
 
     with engine.connect() as conn:
         rows = conn.execute(text(query), params).mappings().all()
-    return templates.TemplateResponse("dashboard.html", {"request": request, "jobs": rows, "status": status})
+    return templates.TemplateResponse(
+        "dashboard.html",
+        {"request": request, "jobs": rows, "status": status, "show_skipped": show_skipped},
+    )
 
 
 @app.get("/dashboard/{job_score_id}")

@@ -31,6 +31,17 @@ import httpx
 JSEARCH_BASE_URL = "https://jsearch.p.rapidapi.com/search-v2"
 
 
+def _safe_int(value, default: int) -> int:
+    """Coacciona a int de forma segura (config o parametros de llamada); nunca lanza."""
+    if value is None:
+        return default
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        print(f"[jsearch_client] Valor invalido '{value}', usando default {default}.")
+        return default
+
+
 def search_jobs(
     query: str,
     location: str | None,
@@ -46,12 +57,15 @@ def search_jobs(
     if date_posted is None:
         date_posted = os.environ.get("JSEARCH_DATE_POSTED", "month")
     if num_pages is None:
-        num_pages = int(os.environ.get("JSEARCH_NUM_PAGES", "1"))
+        num_pages = _safe_int(os.environ.get("JSEARCH_NUM_PAGES"), 1)
+    else:
+        num_pages = _safe_int(num_pages, 1)
+    page = _safe_int(page, 1)
 
     headers = {"X-RapidAPI-Key": api_key, "X-RapidAPI-Host": host}
     params = {
         "query": f"{query} in {location}" if location else query,
-        "page": str(max(1, int(page))),
+        "page": str(max(1, page)),
         "num_pages": str(max(1, num_pages)),
         "country": country,
         "language": language,

@@ -1,6 +1,15 @@
 """
 Entrypoint del cron (GitHub Actions, cada 4h).
 Orquesta todo el pipeline de descubrimiento y scoring de ofertas.
+
+Cada ejecucion consulta TODAS las variantes de busqueda activas (no una sola
+por rotacion), y por cada variante pagina hasta JSEARCH_MAX_PAGES_PER_VARIANT
+paginas o hasta que los resultados dejen de aportar ofertas mas recientes que
+el cutoff de esa variante - lo que ocurra antes. Esto es deliberadamente mas
+costoso en cuota de JSearch que una unica llamada por ejecucion, a cambio de
+un barrido mas exhaustivo del perfil. Hay un corte de seguridad por
+presupuesto mensual que impide superar JSEARCH_MONTHLY_BUDGET.
+
 Fail-soft: nunca debe terminar con excepcion no controlada.
 """
 import os
@@ -24,12 +33,14 @@ from pipeline.scoring import (  # noqa: E402
     evaluate_job_with_llm,
     compute_final_score,
 )
-from pipeline.query_variants import get_or_seed_variant, mark_variant_run  # noqa: E402
+from pipeline.query_variants import get_or_seed_variants, mark_variant_run  # noqa: E402
 
 JSEARCH_MONTHLY_BUDGET = int(os.environ.get("JSEARCH_MONTHLY_BUDGET", 180))
 LLM_DAILY_BUDGET = int(os.environ.get("LLM_DAILY_BUDGET", 48))
 TOP_N_FOR_LLM = 8
 VECTOR_SIMILARITY_THRESHOLD = 0.55
+MAX_PAGES_PER_VARIANT = int(os.environ.get("JSEARCH_MAX_PAGES_PER_VARIANT", 3))
+JSEARCH_PAGE_SIZE_HINT = 10  # heuristica: una pagina con menos resultados que esto se asume la ultima
 
 
 def check_budget(engine) -> tuple[bool, int, int]:
@@ -86,6 +97,73 @@ def parse_posted_at(value):
         return None
 
 
+def _process_job(conn, raw, profile, cutoff, errors) -> tuple[bool, object, bool]:
+    """
+    Procesa una oferta cruda de JSearch dentro de la transaccion `conn`.
+    Devuelve (es_fresca, posted_at, fue_insertada):
+      - es_fresca: si cae dentro de la ventana temporal de la variante (para
+        decidir si seguir paginando).
+      - posted_at: timestamp parseado (o None), para actualizar el cutoff.
+      - fue_insertada: True solo si se inserto una fila nueva en job_offer.
+    No lanza excepciones de negocio: los fallos puntuales (embedding, etc.)
+    se registran en `errors` y la oferta se salta sin insertar.
+    """
+    job = normalize_job(raw)
+    if not job["external_id"] or not job["apply_link"]:
+        return False, None, False
+
+    posted_at = parse_posted_at(job.get("posted_at"))
+    is_fresh = cutoff is None or posted_at is None or posted_at > cutoff
+    if not is_fresh:
+        return False, posted_at, False
+
+    if is_blacklisted(job["title"]) and not any(
+        kw in job["title"].lower() for kw in profile.get("role_family", [])
+    ):
+        return True, posted_at, False
+
+    existing = conn.execute(
+        text("SELECT id FROM job_offer WHERE external_id = :eid"),
+        {"eid": job["external_id"]},
+    ).first()
+    if existing:
+        return True, posted_at, False
+
+    title_str = safe_text(job.get("title"))
+    description_str = safe_text(job.get("description"))
+    embed_input = f"{title_str} {description_str}".strip() or "oferta sin descripcion"
+
+    try:
+        job_embedding = embed_text(embed_input)
+    except Exception as e:
+        errors.append(f"Error generando embedding para job {job['external_id']}: {e}")
+        return True, posted_at, False
+
+    similarity = cosine_similarity(job_embedding, profile["embedding"])
+
+    result = conn.execute(
+        text("""
+            INSERT INTO job_offer (external_id, title, company, location, remote_type,
+                description, apply_link, source, salary_min, salary_max, posted_at, embedding)
+            VALUES (:external_id, :title, :company, :location, :remote_type,
+                :description, :apply_link, :source, :salary_min, :salary_max, :posted_at, CAST(:embedding AS vector))
+            RETURNING id
+        """),
+        {**job, "embedding": to_pgvector_literal(job_embedding)},
+    )
+    job_offer_id = result.scalar()
+
+    conn.execute(
+        text("""
+            INSERT INTO job_score (job_offer_id, profile_id, vector_similarity, llm_evaluated, final_score)
+            VALUES (:job_offer_id, 1, :similarity, FALSE, :final_score)
+            ON CONFLICT (job_offer_id, profile_id) DO NOTHING
+        """),
+        {"job_offer_id": job_offer_id, "similarity": similarity, "final_score": similarity * 100},
+    )
+    return True, posted_at, True
+
+
 def main():
     engine = get_engine()
     started_at = datetime.now(timezone.utc)
@@ -93,8 +171,6 @@ def main():
     llm_calls = 0
     new_jobs_found = 0
     errors = []
-    variant = None
-    newest_posted_at = None
 
     try:
         profile = load_profile(engine)
@@ -108,80 +184,78 @@ def main():
             return
 
         try:
-            variant = get_or_seed_variant(engine, 1, profile)
+            variants = get_or_seed_variants(engine, 1, profile)
         except RuntimeError as e:
             errors.append(str(e))
             return
 
-        query = variant["query_text"]
-        cutoff = variant.get("last_posted_cutoff_utc")
         remote_only = profile.get("remote_preference") == "remote"
+        location = profile.get("location_preference")
+        budget_exhausted = False
 
-        print(
-            f"JSearch query (variante '{variant['query_text']}', id={variant['id']}): "
-            f"location='{profile.get('location_preference')}', remote_only={remote_only}, cutoff={cutoff}"
-        )
-        raw_jobs = search_jobs(query=query, location=profile.get("location_preference"), remote_only=remote_only)
-        jsearch_calls += 1
+        for variant in variants:
+            if budget_exhausted:
+                errors.append(
+                    f"Presupuesto JSearch agotado tras {jsearch_calls} llamadas en esta ejecucion; "
+                    f"variante '{variant['query_text']}' (y las siguientes) se omiten hasta la proxima ejecucion."
+                )
+                break
 
-        with engine.begin() as conn:
-            for raw in raw_jobs:
-                job = normalize_job(raw)
-                if not job["external_id"] or not job["apply_link"]:
-                    continue
+            cutoff = variant.get("last_posted_cutoff_utc")
+            variant_newest_posted_at = None
 
-                posted_at = parse_posted_at(job.get("posted_at"))
-                if posted_at is not None and (newest_posted_at is None or posted_at > newest_posted_at):
-                    newest_posted_at = posted_at
+            try:
+                page = 1
+                while page <= MAX_PAGES_PER_VARIANT:
+                    if jsearch_used_month + jsearch_calls >= JSEARCH_MONTHLY_BUDGET:
+                        budget_exhausted = True
+                        errors.append(
+                            f"Presupuesto JSearch agotado tras {jsearch_calls} llamadas en esta ejecucion; "
+                            f"variante '{variant['query_text']}' pagina {page} no se llego a pedir."
+                        )
+                        break
 
-                if cutoff is not None and posted_at is not None and posted_at <= cutoff:
-                    continue
+                    print(
+                        f"JSearch query (variante '{variant['query_text']}', id={variant['id']}, pagina {page}): "
+                        f"location='{location}', remote_only={remote_only}, cutoff={cutoff}"
+                    )
+                    try:
+                        raw_jobs = search_jobs(
+                            query=variant["query_text"], location=location, remote_only=remote_only, page=page
+                        )
+                    except Exception as e:
+                        errors.append(f"Error JSearch en variante '{variant['query_text']}' pagina {page}: {e}")
+                        break
+                    jsearch_calls += 1
 
-                if is_blacklisted(job["title"]) and not any(
-                    kw in job["title"].lower() for kw in profile.get("role_family", [])
-                ):
-                    continue
+                    if not raw_jobs:
+                        break
 
-                existing = conn.execute(
-                    text("SELECT id FROM job_offer WHERE external_id = :eid"),
-                    {"eid": job["external_id"]},
-                ).first()
-                if existing:
-                    continue
+                    page_has_fresh_job = False
+                    with engine.begin() as conn:
+                        for raw in raw_jobs:
+                            is_fresh, posted_at, was_inserted = _process_job(conn, raw, profile, cutoff, errors)
+                            if posted_at is not None and (
+                                variant_newest_posted_at is None or posted_at > variant_newest_posted_at
+                            ):
+                                variant_newest_posted_at = posted_at
+                            if is_fresh:
+                                page_has_fresh_job = True
+                            if was_inserted:
+                                new_jobs_found += 1
 
-                title_str = safe_text(job.get("title"))
-                description_str = safe_text(job.get("description"))
-                embed_input = f"{title_str} {description_str}".strip() or "oferta sin descripcion"
-
+                    if cutoff is not None and not page_has_fresh_job:
+                        break
+                    if len(raw_jobs) < JSEARCH_PAGE_SIZE_HINT:
+                        break
+                    page += 1
+            except Exception as e:
+                errors.append(f"Error procesando variante '{variant['query_text']}': {e}")
+            finally:
                 try:
-                    job_embedding = embed_text(embed_input)
+                    mark_variant_run(engine, variant["id"], variant_newest_posted_at)
                 except Exception as e:
-                    errors.append(f"Error generando embedding para job {job['external_id']}: {e}")
-                    continue
-
-                similarity = cosine_similarity(job_embedding, profile["embedding"])
-
-                result = conn.execute(
-                    text("""
-                        INSERT INTO job_offer (external_id, title, company, location, remote_type,
-                            description, apply_link, source, salary_min, salary_max, posted_at, embedding)
-                        VALUES (:external_id, :title, :company, :location, :remote_type,
-                            :description, :apply_link, :source, :salary_min, :salary_max, :posted_at, CAST(:embedding AS vector))
-                        RETURNING id
-                    """),
-                    {**job, "embedding": to_pgvector_literal(job_embedding)},
-                )
-                job_offer_id = result.scalar()
-                new_jobs_found += 1
-
-                conn.execute(
-                    text("""
-                        INSERT INTO job_score (job_offer_id, profile_id, vector_similarity, llm_evaluated, final_score)
-                        VALUES (:job_offer_id, 1, :similarity, FALSE, :final_score)
-                        ON CONFLICT (job_offer_id, profile_id) DO NOTHING
-                    """),
-                    {"job_offer_id": job_offer_id, "similarity": similarity, "final_score": similarity * 100},
-                )
+                    errors.append(f"Error actualizando cutoff de variante {variant.get('id')}: {e}")
 
         with engine.begin() as conn:
             pending = conn.execute(
@@ -228,11 +302,6 @@ def main():
     except Exception:
         errors.append(traceback.format_exc())
     finally:
-        if variant is not None:
-            try:
-                mark_variant_run(engine, variant["id"], newest_posted_at)
-            except Exception as e:
-                errors.append(f"Error actualizando cutoff de variante {variant.get('id')}: {e}")
         _log_run(engine, started_at, jsearch_calls, llm_calls, new_jobs_found, errors)
 
 

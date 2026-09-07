@@ -1,5 +1,7 @@
 FROM mcr.microsoft.com/playwright/python:v1.47.0-jammy
 
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
 COPY requirements-linkedin.txt .

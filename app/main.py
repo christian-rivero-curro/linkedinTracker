@@ -174,8 +174,20 @@ def generate_variants():
     return RedirectResponse(url="/onboarding", status_code=303)
 
 
+def _parse_bool_param(value: str) -> bool:
+    """
+    Convierte un parametro de query string en booleano de forma tolerante.
+    Los enlaces/formularios del dashboard a veces generan show_skipped='' (vacio)
+    en vez de omitir el parametro; con bool nativo de FastAPI eso da un 422.
+    Cualquier valor vacio, '0' o 'false' (case-insensitive) se trata como False;
+    el resto (incluido '1', 'true', 'on') se trata como True.
+    """
+    return value.strip().lower() not in ("", "0", "false", "no")
+
+
 @app.get("/dashboard")
-def dashboard(request: Request, status: str = "all", show_skipped: bool = False, variant_id: str = "all"):
+def dashboard(request: Request, status: str = "all", show_skipped: str = "", variant_id: str = "all"):
+    show_skipped_bool = _parse_bool_param(show_skipped)
     engine = get_engine()
     query = """
         SELECT js.id, jo.title, jo.company, jo.location, jo.remote_type, jo.apply_link,
@@ -187,7 +199,7 @@ def dashboard(request: Request, status: str = "all", show_skipped: bool = False,
         WHERE js.profile_id = 1 AND js.llm_evaluated = TRUE
     """
     params = {}
-    if not show_skipped:
+    if not show_skipped_bool:
         query += " AND COALESCE(js.recommendation, 'consider') != 'skip'"
     if status != "all":
         query += " AND js.status = :status"
@@ -215,7 +227,7 @@ def dashboard(request: Request, status: str = "all", show_skipped: bool = False,
             "request": request,
             "jobs": rows,
             "status": status,
-            "show_skipped": show_skipped,
+            "show_skipped": show_skipped_bool,
             "variant_id": variant_id,
             "variants": variants,
             "pending_llm_count": pending_llm_count,

@@ -5,10 +5,11 @@ contenedor Docker en TU PROPIA maquina - NUNCA en GitHub Actions.
 Requiere haber ejecutado antes pipeline/linkedin_login.py una vez para generar
 la sesion guardada (ver LINKEDIN_STORAGE_STATE).
 
-Cada variante usa una PESTANA NUEVA (context.new_page()), cerrada al terminar
-esa variante. Reutilizar la misma pestana entre navegaciones sucesivas dejaba
-navegaciones a medias en segundo plano que provocaban timeouts/abortos en
-cascada en las variantes siguientes.
+Cada variante usa una PESTANA NUEVA (context.new_page()), con listeners de
+diagnostico enganchados (attach_diagnostics_listeners) para capturar errores
+de consola JS, peticiones de red fallidas y respuestas 401/403 de la API
+interna de LinkedIn - la causa mas probable de que la app se quede colgada en
+su pantalla de carga sin llegar a mostrar resultados ni redirigir a login.
 
 Reutiliza pipeline/job_ingest.py (verbose=True, para ver el motivo exacto de
 cada oferta descartada) - mismo pipeline de scoring vectorial + evaluacion LLM
@@ -35,7 +36,7 @@ from app.db import get_engine  # noqa: E402
 from pipeline.embeddings import parse_pgvector  # noqa: E402
 from pipeline.job_ingest import process_and_store_job  # noqa: E402
 from pipeline.query_variants import get_all_variants  # noqa: E402
-from pipeline.linkedin_scraper import scrape_variant, new_browser_context, LinkedInBlockedError  # noqa: E402
+from pipeline.linkedin_scraper import scrape_variant, new_browser_context, attach_diagnostics_listeners, LinkedInBlockedError  # noqa: E402
 
 
 def _int_env(name: str, default: int) -> int:
@@ -94,6 +95,7 @@ def main():
                     break
                 print(f"\n=== Variante '{variant['query_text']}' (id={variant['id']}) ===")
                 page = context.new_page()
+                diag_state = attach_diagnostics_listeners(page)
                 try:
                     raw_jobs = scrape_variant(
                         page,
@@ -102,6 +104,7 @@ def main():
                         remote_preference=profile.get("remote_preference"),
                         hours_ago=LINKEDIN_HOURS_AGO,
                         max_jobs=LINKEDIN_MAX_JOBS_PER_VARIANT,
+                        diag_state=diag_state,
                     )
                 except LinkedInBlockedError as e:
                     errors.append(f"BLOQUEO de LinkedIn detectado, abortando ejecucion sin reintentar: {e}")

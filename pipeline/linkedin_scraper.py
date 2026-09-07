@@ -4,15 +4,21 @@ Automatizacion con Playwright de la busqueda de empleo de LinkedIn.
 IMPORTANTE: los selectores de DOM usados aqui son los documentados/observados
 a fecha de escritura de este modulo. LinkedIn cambia su HTML con cierta
 frecuencia; si scrape_variant() deja de encontrar tarjetas o descripcion, este
-es el primer sitio a revisar. Los logs de esta funcion estan pensados
-precisamente para detectar eso rapido.
+es el primer sitio a revisar.
 
-Si la navegacion falla o se queda a medias, se guarda un diagnostico
-(screenshot + titulo + primeros caracteres del HTML) en LINKEDIN_DIAGNOSTICS_DIR
-(por defecto linkedin_diagnostics/, montado como volumen de lectura-escritura
-en docker-compose.linkedin.yml) para poder ver EXACTAMENTE que esta mostrando
-LinkedIn en ese momento (challenge/verificacion, mobile redirect, etc.) en vez
-de especular a ciegas sobre la causa de un timeout.
+Diagnostico reforzado: si la navegacion falla o se queda a medias (p.ej.
+atascada en la pantalla de carga inicial de LinkedIn, 'app-loader'), se
+guarda:
+  - screenshot + titulo + HTML parcial (_save_diagnostics)
+  - errores de consola JS del navegador
+  - peticiones de red que fallaron
+  - respuestas HTTP 401/403 de la API interna de LinkedIn (Voyager), que
+    suelen ser la causa real de que la app se quede colgada en el loader sin
+    redirigir a login (sesion invalida/bloqueada mientras el shell HTML si
+    carga bien).
+Todo esto se guarda en LINKEDIN_DIAGNOSTICS_DIR (por defecto
+linkedin_diagnostics/, montado como volumen de lectura-escritura en
+docker-compose.linkedin.yml).
 
 Disenado para minimizar senales de bot:
 - Reutiliza una sesion guardada (storage_state) en vez de loguearse cada vez.
@@ -75,10 +81,44 @@ def _check_blocked(page):
         raise LinkedInBlockedError(f"LinkedIn redirigio a una pagina de bloqueo/login: {url}")
 
 
-def _save_diagnostics(page, label: str):
-    """Guarda screenshot + titulo + HTML parcial de la pagina en el momento del
-    fallo. Nunca lanza: un fallo capturando el diagnostico no debe tapar el
-    error original."""
+def attach_diagnostics_listeners(page) -> dict:
+    """
+    Engancha listeners a la pestana para capturar, en vivo, todo lo que puede
+    explicar por que la app de LinkedIn se queda congelada en su pantalla de
+    carga inicial ('app-loader'): errores de JS en consola, peticiones de red
+    fallidas, y respuestas 401/403 de la API interna (Voyager) - la causa mas
+    probable de que el shell HTML cargue pero la app nunca llegue a hidratarse
+    ni a redirigir a login.
+
+    Devuelve un dict de listas que se van rellenando via closures; pasar este
+    dict a scrape_variant()/_save_diagnostics() para volcarlo en los logs.
+    """
+    diag_state = {"console_errors": [], "failed_requests": [], "unauthorized_responses": []}
+
+    def _on_console(msg):
+        if msg.type in ("error", "warning"):
+            diag_state["console_errors"].append(f"[{msg.type}] {msg.text}")
+
+    def _on_request_failed(request):
+        failure = request.failure
+        diag_state["failed_requests"].append(f"{request.method} {request.url} -> {failure}")
+
+    def _on_response(response):
+        if response.status in (401, 403):
+            diag_state["unauthorized_responses"].append(f"{response.status} {response.request.method} {response.url}")
+
+    page.on("console", _on_console)
+    page.on("requestfailed", _on_request_failed)
+    page.on("response", _on_response)
+
+    return diag_state
+
+
+def _save_diagnostics(page, label: str, diag_state: dict | None = None):
+    """Guarda screenshot + titulo + HTML parcial + (si se paso diag_state)
+    errores de consola / peticiones fallidas / respuestas 401-403 capturadas
+    durante la navegacion. Nunca lanza: un fallo capturando el diagnostico no
+    debe tapar el error original."""
     try:
         os.makedirs(DIAGNOSTICS_DIR, exist_ok=True)
         safe_label = re.sub(r"[^a-zA-Z0-9_-]", "_", label)[:50]
@@ -97,6 +137,31 @@ def _save_diagnostics(page, label: str):
             _log(f"DIAGNOSTICO: primeros 1500 caracteres del HTML:\n{content_snippet}")
         except Exception as e:
             _log(f"DIAGNOSTICO: no se pudo leer el HTML: {e}")
+
+        if diag_state is not None:
+            unauthorized = diag_state.get("unauthorized_responses") or []
+            if unauthorized:
+                _log(f"DIAGNOSTICO: {len(unauthorized)} respuesta(s) 401/403 detectadas:")
+                for line in unauthorized[-10:]:
+                    _log(f"    {line}")
+            else:
+                _log("DIAGNOSTICO: no se detectaron respuestas 401/403.")
+
+            failed = diag_state.get("failed_requests") or []
+            if failed:
+                _log(f"DIAGNOSTICO: {len(failed)} peticion(es) de red fallida(s):")
+                for line in failed[-10:]:
+                    _log(f"    {line}")
+            else:
+                _log("DIAGNOSTICO: no se detectaron peticiones de red fallidas.")
+
+            console_errors = diag_state.get("console_errors") or []
+            if console_errors:
+                _log(f"DIAGNOSTICO: {len(console_errors)} error(es)/warning(s) de consola JS:")
+                for line in console_errors[-10:]:
+                    _log(f"    {line}")
+            else:
+                _log("DIAGNOSTICO: no se detectaron errores de consola JS.")
     except Exception as e:
         _log(f"DIAGNOSTICO: fallo capturando diagnostico: {e}")
 
@@ -158,17 +223,14 @@ def new_browser_context(playwright, headless: bool = True):
     return browser, context
 
 
-def scrape_variant(page, query_text: str, location: str | None, remote_preference: str | None, hours_ago: int, max_jobs: int = 25) -> list[dict]:
+def scrape_variant(page, query_text: str, location: str | None, remote_preference: str | None, hours_ago: int, max_jobs: int = 25, diag_state: dict | None = None) -> list[dict]:
     """
     Navega a la busqueda de LinkedIn para esta variante y devuelve una lista de
     dicts en el formato normalizado que espera pipeline/job_ingest.py.
 
-    La espera de navegacion se hace en dos pasos: primero 'commit' (fires en
-    cuanto llega la respuesta HTTP, casi nunca cuelga) y luego
-    'domcontentloaded' por separado con manejo de error propio - asi, si el
-    DOM tarda mucho en completarse (challenge/verificacion de LinkedIn), aun
-    tenemos una pagina viva de la que sacar diagnostico en vez de perderla en
-    un unico timeout largo.
+    'diag_state', si se pasa (ver attach_diagnostics_listeners), se vuelca en
+    cada punto de fallo para saber si la app se quedo colgada por un 401/403
+    de la API interna, por un error de JS, o por peticiones de red fallidas.
     """
     url = build_search_url(query_text, location, remote_preference, hours_ago)
     _log(f"URL de busqueda: {url}")
@@ -176,7 +238,7 @@ def scrape_variant(page, query_text: str, location: str | None, remote_preferenc
     try:
         page.goto(url, wait_until="commit", timeout=NAVIGATION_TIMEOUT_MS)
     except PlaywrightTimeoutError:
-        _save_diagnostics(page, query_text)
+        _save_diagnostics(page, query_text, diag_state)
         raise TimeoutError(f"Timeout esperando 'commit' de la navegacion. Ultima URL alcanzada: {page.url}")
     _log(f"Commit recibido. URL tras el commit: {page.url}")
 
@@ -184,7 +246,7 @@ def scrape_variant(page, query_text: str, location: str | None, remote_preferenc
         page.wait_for_load_state("domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
         _log("domcontentloaded alcanzado correctamente.")
     except PlaywrightTimeoutError:
-        _save_diagnostics(page, query_text)
+        _save_diagnostics(page, query_text, diag_state)
         _log("AVISO: domcontentloaded no se alcanzo a tiempo; se continua igualmente con el DOM parcial disponible.")
 
     _random_delay(2, 4)
@@ -195,7 +257,7 @@ def scrape_variant(page, query_text: str, location: str | None, remote_preferenc
         _log("Lista de resultados encontrada en el DOM.")
     except PlaywrightTimeoutError:
         _check_blocked(page)
-        _save_diagnostics(page, query_text)
+        _save_diagnostics(page, query_text, diag_state)
         _log(
             "AVISO: no se encontro el contenedor de resultados "
             f"(selector actual: '{RESULTS_LIST_SELECTOR}'). Puede que LinkedIn haya cambiado el HTML, "

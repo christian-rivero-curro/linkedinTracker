@@ -14,6 +14,8 @@ BLACKLIST_KEYWORDS = [
     "recruiter", "reclutador", "comercial", "abogado",
 ]
 
+VALID_RECOMMENDATIONS = ("apply", "consider", "skip")
+
 
 def is_blacklisted(title: str) -> bool:
     title_lower = title.lower()
@@ -37,6 +39,18 @@ def hard_requirements_score(profile: dict, job: dict) -> float:
     return max(score, 0.0)
 
 
+def _clean_recommendation(value) -> str:
+    """
+    Normaliza la recomendacion del LLM a uno de los valores validos. Si el LLM
+    se desvia del esquema (valor inesperado, mayusculas, tipo no str, ausente),
+    se usa 'consider' por defecto: preferimos mostrar de mas (y dejar que el
+    usuario decida) antes que ocultar una oferta por un fallo de parseo.
+    """
+    if isinstance(value, str) and value.strip().lower() in VALID_RECOMMENDATIONS:
+        return value.strip().lower()
+    return "consider"
+
+
 def evaluate_job_with_llm(profile_json: dict, job: dict) -> dict:
     model = os.environ.get("OPENROUTER_MODEL_SCORING", "minimax/minimax-m2.7:free")
     prompt_template = PROMPT_PATH.read_text(encoding="utf-8")
@@ -54,7 +68,7 @@ def evaluate_job_with_llm(profile_json: dict, job: dict) -> dict:
         "pros": result.get("pros", []),
         "cons": result.get("cons", []),
         "missing_requirements": result.get("missing_requirements", []),
-        "recommendation": result.get("recommendation", "consider"),
+        "recommendation": _clean_recommendation(result.get("recommendation")),
     }
 
 

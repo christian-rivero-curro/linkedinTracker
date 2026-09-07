@@ -10,7 +10,9 @@ costoso en cuota de JSearch que una unica llamada por ejecucion, a cambio de
 un barrido mas exhaustivo del perfil. Hay un corte de seguridad por
 presupuesto mensual que impide superar JSEARCH_MONTHLY_BUDGET.
 
-Fail-soft: nunca debe terminar con excepcion no controlada.
+Fail-soft: nunca debe terminar con excepcion no controlada, incluida la
+lectura de configuracion (variables de entorno mal escritas usan su default
+en vez de tumbar el modulo entero al importarlo).
 """
 import os
 import sys
@@ -35,11 +37,29 @@ from pipeline.scoring import (  # noqa: E402
 )
 from pipeline.query_variants import get_or_seed_variants, mark_variant_run  # noqa: E402
 
-JSEARCH_MONTHLY_BUDGET = int(os.environ.get("JSEARCH_MONTHLY_BUDGET", 180))
-LLM_DAILY_BUDGET = int(os.environ.get("LLM_DAILY_BUDGET", 48))
+
+def _int_env(name: str, default: int) -> int:
+    """
+    Lee una variable de entorno como int de forma segura. Si falta, esta vacia
+    o no es convertible, devuelve el default sin lanzar excepcion - un typo en
+    la configuracion (ej. JSEARCH_MAX_PAGES_PER_VARIANT='3,') no debe tumbar
+    todo el cron a nivel de import, antes incluso de llegar a main().
+    """
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        print(f"[run_discovery] Valor invalido para {name}='{raw}', usando default {default}.")
+        return default
+
+
+JSEARCH_MONTHLY_BUDGET = _int_env("JSEARCH_MONTHLY_BUDGET", 180)
+LLM_DAILY_BUDGET = _int_env("LLM_DAILY_BUDGET", 48)
 TOP_N_FOR_LLM = 8
 VECTOR_SIMILARITY_THRESHOLD = 0.55
-MAX_PAGES_PER_VARIANT = int(os.environ.get("JSEARCH_MAX_PAGES_PER_VARIANT", 3))
+MAX_PAGES_PER_VARIANT = max(1, _int_env("JSEARCH_MAX_PAGES_PER_VARIANT", 3))
 JSEARCH_PAGE_SIZE_HINT = 10  # heuristica: una pagina con menos resultados que esto se asume la ultima
 
 

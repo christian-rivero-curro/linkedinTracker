@@ -48,7 +48,7 @@
   </div>
   <p class="muted">
     Filtrar por variante de busqueda:
-    <select onchange="location.href='/dashboard?status={{ status }}&show_skipped={{ '1' if show_skipped else '' }}&variant_id=' + this.value">
+    <select onchange="location.href='/dashboard?status={{ status }}{{ '&show_skipped=1' if show_skipped else '' }}&variant_id=' + this.value">
       <option value="all" {{ 'selected' if variant_id == 'all' else '' }}>Todas las variantes</option>
       {% for v in variants %}
       <option value="{{ v.id }}" {{ 'selected' if variant_id == v.id|string else '' }}>{{ v.query_text }}</option>
@@ -96,7 +96,7 @@
           <td>{{ job.location }} ({{ job.remote_type }})</td>
           <td data-value="{{ job.variant_query or '' }}" title="{{ job.variant_query or '' }}">
             {% if job.variant_query %}
-              <a href="/dashboard?status={{ status }}&show_skipped={{ '1' if show_skipped else '' }}&variant_id={{ job.variant_id }}">{{ job.variant_query | truncate(28) }}</a>
+              <a href="/dashboard?status={{ status }}{{ '&show_skipped=1' if show_skipped else '' }}&variant_id={{ job.variant_id }}">{{ job.variant_query | truncate(28) }}</a>
             {% else %}
               <span class="muted">—</span>
             {% endif %}

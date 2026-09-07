@@ -328,7 +328,8 @@ def main():
                 conn.execute(
                     text("""
                         UPDATE job_score SET llm_score = :llm_score, llm_evaluated = TRUE,
-                            pros = :pros, cons = :cons, missing_requirements = :missing, final_score = :final_score
+                            pros = :pros, cons = :cons, missing_requirements = :missing,
+                            recommendation = :recommendation, final_score = :final_score
                         WHERE id = :score_id
                     """),
                     {
@@ -336,6 +337,7 @@ def main():
                         "pros": evaluation["pros"],
                         "cons": evaluation["cons"],
                         "missing": evaluation["missing_requirements"],
+                        "recommendation": evaluation["recommendation"],
                         "final_score": final_score,
                         "score_id": row["score_id"],
                     },

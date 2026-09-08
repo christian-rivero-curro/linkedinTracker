@@ -1,76 +1,658 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Perfil y preferencias</h1>
-{% if has_profile %}<p>Ya tienes un perfil guardado. Puedes revisar y editar los datos abajo; al guardar se sobrescribira.</p>{% endif %}
-<form method="post" action="/onboarding">
-  <label for="raw_cv_text">Pega el texto de tu CV</label>
-  <textarea id="raw_cv_text" name="raw_cv_text" rows="12" required>{{ profile.raw_cv_text if profile else '' }}</textarea>
+<style>
+  .onboarding-container {
+    max-width: 920px;
+    margin: 0 auto;
+  }
+  .section-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 1.75rem;
+    margin-bottom: 1.75rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03), 0 4px 6px -2px rgba(0, 0, 0, 0.02);
+    transition: border-color 0.2s;
+  }
+  .section-card:hover {
+    border-color: #cbd5e1;
+  }
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.5rem;
+  }
+  .section-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #0f172a;
+    margin: 0;
+  }
+  .section-desc {
+    font-size: 0.875rem;
+    color: #64748b;
+    margin: 0 0 1.25rem 0;
+    line-height: 1.45;
+  }
+  .form-grid-2 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.25rem;
+  }
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .form-label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #334155;
+  }
+  .form-help {
+    font-size: 0.75rem;
+    color: #94a3b8;
+  }
+  .form-input, .form-select, .form-textarea {
+    width: 100%;
+    padding: 0.65rem 0.85rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    color: #1e293b;
+    background: #f8fafc;
+    transition: all 0.15s ease-in-out;
+    outline: none;
+    font-family: inherit;
+  }
+  .form-input:focus, .form-select:focus, .form-textarea:focus {
+    background: #ffffff;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+  }
+  .form-textarea {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.84rem;
+    line-height: 1.5;
+    resize: vertical;
+  }
 
-  <label for="location_preference">Ubicacion preferida</label>
-  <input id="location_preference" name="location_preference" type="text" placeholder="Barcelona, Spain" value="{{ profile.location_preference if profile and profile.location_preference else '' }}">
+  /* Variantes interactivas */
+  .variant-toolbar {
+    display: flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+    align-items: center;
+  }
+  .variant-input-wrap {
+    flex: 1;
+    min-width: 250px;
+    display: flex;
+    gap: 0.5rem;
+  }
+  .btn-secondary {
+    background: #f1f5f9;
+    color: #334155;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 0.55rem 1rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .btn-secondary:hover {
+    background: #e2e8f0;
+    color: #0f172a;
+  }
+  .btn-ai {
+    background: #f5f3ff;
+    color: #6d28d9;
+    border: 1px solid #ddd6fe;
+  }
+  .btn-ai:hover {
+    background: #ede9fe;
+    color: #5b21b6;
+  }
+  .variants-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    margin-top: 0.75rem;
+  }
+  .variant-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 0.6rem 0.85rem;
+    transition: all 0.15s;
+  }
+  .variant-item:hover {
+    background: #ffffff;
+    border-color: #cbd5e1;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  }
+  .variant-item.inactive {
+    opacity: 0.6;
+    background: #f1f5f9;
+  }
+  .variant-item .query-input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: #1e293b;
+    outline: none;
+    padding: 0.2rem 0;
+  }
+  .variant-item .query-input:focus {
+    background: #ffffff;
+    box-shadow: 0 0 0 2px #3b82f6;
+    border-radius: 4px;
+    padding: 0.2rem 0.4rem;
+  }
+  .variant-badge {
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.2rem 0.5rem;
+    border-radius: 999px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .badge-ai { background: #ede9fe; color: #6d28d9; }
+  .badge-manual { background: #e0f2fe; color: #0369a1; }
 
-  <label for="remote_preference">Modalidad</label>
-  <select id="remote_preference" name="remote_preference">
-    {% set current_remote = profile.remote_preference if profile else 'any' %}
-    <option value="any" {{ 'selected' if current_remote == 'any' else '' }}>Cualquiera</option>
-    <option value="remote" {{ 'selected' if current_remote == 'remote' else '' }}>Remoto</option>
-    <option value="hybrid" {{ 'selected' if current_remote == 'hybrid' else '' }}>Hibrido</option>
-    <option value="onsite" {{ 'selected' if current_remote == 'onsite' else '' }}>Presencial</option>
-  </select>
+  /* Toggle Switch moderno */
+  .switch-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    cursor: pointer;
+    user-select: none;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #64748b;
+  }
+  .switch {
+    position: relative;
+    display: inline-block;
+    width: 38px;
+    height: 22px;
+  }
+  .switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+  .slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-color: #cbd5e1;
+    transition: .2s;
+    border-radius: 22px;
+  }
+  .slider:before {
+    position: absolute;
+    content: "";
+    height: 16px;
+    width: 16px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: .2s;
+    border-radius: 50%;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+  }
+  input:checked + .slider {
+    background-color: #16a34a;
+  }
+  input:checked + .slider:before {
+    transform: translateX(16px);
+  }
 
-  <label for="role_family">Familias de rol (separadas por comas)</label>
-  <input id="role_family" name="role_family" type="text" placeholder="backend, cloud-architect, devops" value="{{ (profile.role_family | join(', ')) if profile and profile.role_family else '' }}">
+  .btn-remove-variant {
+    background: transparent;
+    border: none;
+    color: #94a3b8;
+    cursor: pointer;
+    font-size: 1.1rem;
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .btn-remove-variant:hover {
+    color: #ef4444;
+    background: #fee2e2;
+  }
 
-  <label for="min_salary">Salario minimo (opcional, anual bruto)</label>
-  <input id="min_salary" name="min_salary" type="number" value="{{ profile.min_salary if profile and profile.min_salary else '' }}">
+  /* Barra de guardado única abajo del todo */
+  .save-bar-footer {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 1.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.05);
+    margin-top: 2rem;
+  }
+  .save-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .save-info-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #0f172a;
+  }
+  .save-info-desc {
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+  .save-actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+  .btn-save-primary {
+    background: #2563eb;
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    padding: 0.75rem 1.75rem;
+    font-size: 0.95rem;
+    font-weight: 700;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
+    transition: all 0.15s ease-in-out;
+  }
+  .btn-save-primary:hover {
+    background: #1d4ed8;
+    box-shadow: 0 4px 8px rgba(37, 99, 235, 0.3);
+    transform: translateY(-1px);
+  }
+  .btn-cancel {
+    color: #64748b;
+    text-decoration: none;
+    font-size: 0.9rem;
+    font-weight: 500;
+    padding: 0.5rem 0.8rem;
+    border-radius: 6px;
+    transition: color 0.15s;
+  }
+  .btn-cancel:hover {
+    color: #0f172a;
+    background: #f1f5f9;
+  }
 
-  <button type="submit">Guardar y extraer perfil</button>
-</form>
+  .toast-notice {
+    padding: 0.75rem 1rem;
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    color: #1e40af;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    margin-bottom: 1.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+</style>
 
-<hr>
-<h2>Variantes de busqueda</h2>
-<p>El cron rota entre estas variantes en cada ejecucion (una por ejecucion), en vez de usar siempre la misma query. Puedes editarlas, desactivarlas o generar sugerencias nuevas con IA a partir de tu CV; generar con IA anade sugerencias nuevas, nunca borra ni sobrescribe las que ya tengas.</p>
+<div class="onboarding-container">
+  <div style="margin-bottom: 1.75rem;">
+    <h1 style="font-size: 1.5rem; font-weight: 800; color: #0f172a; margin-bottom: 0.3rem;">
+      Configuración de Perfil y Preferencias
+    </h1>
+    <p style="color: #64748b; font-size: 0.92rem; margin: 0;">
+      Define tu experiencia, tus criterios de búsqueda y las variantes que se rastrearán en LinkedIn.
+    </p>
+  </div>
 
-<form method="post" action="/onboarding/variants/generate">
-  <button type="submit">Analizar con IA y generar variantes</button>
-</form>
+  {% if request.query_params.get('saved') %}
+  <div class="toast-notice">
+    <span>✓ <strong>Perfil guardado correctamente.</strong> Los cambios ya están activos para tus próximas búsquedas.</span>
+  </div>
+  {% endif %}
 
-{% if variants %}
-<table>
-  <thead>
-    <tr><th>Query</th><th>Origen</th><th>Activa</th><th>Ultima ejecucion</th><th>Acciones</th></tr>
-  </thead>
-  <tbody>
-    {% for v in variants %}
-    <tr>
-      <td>
-        <form method="post" action="/onboarding/variants/{{ v.id }}/update" style="display:flex; gap:0.5rem; margin-top:0;">
-          <input type="text" name="query_text" value="{{ v.query_text }}" style="margin-top:0;">
-          <button type="submit" style="margin-top:0;">Guardar</button>
-        </form>
-      </td>
-      <td><span class="badge">{{ v.source }}</span></td>
-      <td>{{ 'Si' if v.is_active else 'No' }}</td>
-      <td>{{ v.last_run_at or 'nunca' }}</td>
-      <td>
-        <form method="post" action="/onboarding/variants/{{ v.id }}/toggle" style="display:inline;">
-          <button type="submit" style="margin-top:0;">{{ 'Desactivar' if v.is_active else 'Activar' }}</button>
-        </form>
-        <form method="post" action="/onboarding/variants/{{ v.id }}/delete" style="display:inline;">
-          <button type="submit" style="margin-top:0;">Eliminar</button>
-        </form>
-      </td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% else %}
-<p><em>Aun no hay variantes. Se crearan automaticamente desde tu CV en la primera ejecucion del cron, o puedes generarlas ahora con el boton de arriba (requiere haber guardado el perfil primero).</em></p>
-{% endif %}
+  <!-- FORMULARIO ÚNICO: No se persiste nada hasta hacer clic en "Guardar perfil" al final -->
+  <form id="onboarding-form" method="post" action="/onboarding" onsubmit="return handleFormSubmit(event)">
+    <input type="hidden" name="variants_json" id="variants_json" value="[]">
 
-<form method="post" action="/onboarding/variants/add">
-  <label for="new_variant">Anadir variante manual</label>
-  <input id="new_variant" name="query_text" type="text" placeholder="ej. Site Reliability Engineer AWS">
-  <button type="submit">Anadir</button>
-</form>
+    <!-- SECCIÓN 1: CV -->
+    <div class="section-card">
+      <div class="section-header">
+        <span style="font-size: 1.25rem;">📄</span>
+        <h2 class="section-title">Currículum Vitae</h2>
+      </div>
+      <p class="section-desc">
+        Pega el contenido íntegro de tu CV o extracto profesional. El modelo de IA analizará tu trayectoria, tecnologías clave y años de experiencia para calcular la compatibilidad de cada oferta.
+      </p>
+      <div class="form-group">
+        <textarea
+          id="raw_cv_text"
+          name="raw_cv_text"
+          rows="11"
+          class="form-textarea"
+          placeholder="Pega aquí el texto de tu currículum (experiencia, educación, proyectos, habilidades...)"
+          required
+        >{{ profile.raw_cv_text if profile else '' }}</textarea>
+        <span class="form-help">Información confidencial: sólo accesible por tu usuario logueado.</span>
+      </div>
+    </div>
+
+    <!-- SECCIÓN 2: PREFERENCIAS -->
+    <div class="section-card">
+      <div class="section-header">
+        <span style="font-size: 1.25rem;">🎯</span>
+        <h2 class="section-title">Preferencias de Empleo</h2>
+      </div>
+      <p class="section-desc">
+        Filtros de corte que utilizará el sistema para priorizar o descartar ofertas automáticamente.
+      </p>
+      <div class="form-grid-2">
+        <div class="form-group">
+          <label class="form-label" for="location_preference">Ubicación preferida</label>
+          <input
+            id="location_preference"
+            name="location_preference"
+            type="text"
+            class="form-input"
+            placeholder="ej. Barcelona, España o Madrid"
+            value="{{ profile.location_preference if profile and profile.location_preference else '' }}"
+          >
+          <span class="form-help">Ciudad o país principal donde deseas buscar ofertas.</span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="remote_preference">Modalidad de trabajo</label>
+          <select id="remote_preference" name="remote_preference" class="form-select">
+            {% set current_remote = profile.remote_preference if profile else 'any' %}
+            <option value="any" {{ 'selected' if current_remote == 'any' else '' }}>Cualquier modalidad</option>
+            <option value="remote" {{ 'selected' if current_remote == 'remote' else '' }}>100% Remoto</option>
+            <option value="hybrid" {{ 'selected' if current_remote == 'hybrid' else '' }}>Híbrido</option>
+            <option value="onsite" {{ 'selected' if current_remote == 'onsite' else '' }}>Presencial</option>
+          </select>
+          <span class="form-help">Si eliges modalidad estricta, las incompatibles restarán puntuación.</span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="role_family">Familias de rol profesionales</label>
+          <input
+            id="role_family"
+            name="role_family"
+            type="text"
+            class="form-input"
+            placeholder="ej. AI Engineer, Cloud Architect, DevOps"
+            value="{{ (profile.role_family | join(', ')) if profile and profile.role_family else '' }}"
+          >
+          <span class="form-help">Separadas por comas. Servirá para guiar el matching y las búsquedas.</span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="min_salary">Salario mínimo deseado (€/año)</label>
+          <input
+            id="min_salary"
+            name="min_salary"
+            type="number"
+            class="form-input"
+            placeholder="ej. 45000"
+            value="{{ profile.min_salary if profile and profile.min_salary else '' }}"
+          >
+          <span class="form-help">Opcional. Las ofertas por debajo de este suelo serán penalizadas.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- SECCIÓN 3: VARIANTES DE BÚSQUEDA -->
+    <div class="section-card">
+      <div class="section-header">
+        <span style="font-size: 1.25rem;">🔍</span>
+        <h2 class="section-title">Variantes de Búsqueda en LinkedIn</h2>
+      </div>
+      <p class="section-desc">
+        El sistema rastrea <strong>todas tus variantes activas</strong> en cada ciclo de búsqueda (sin rotar de una en una) para maximizar la cobertura. Puedes añadir nuevos títulos, activarlos o pausarlos. <em>Ningún cambio aquí se guardará hasta que hagas clic en el botón de abajo.</em>
+      </p>
+
+      <!-- Barra de herramientas para añadir variantes -->
+      <div class="variant-toolbar">
+        <div class="variant-input-wrap">
+          <input
+            type="text"
+            id="new_variant_input"
+            class="form-input"
+            placeholder="Añadir búsqueda manual (ej. Senior AI Solutions Engineer)"
+            onkeydown="if(event.key==='Enter'){ event.preventDefault(); addManualVariant(); }"
+          >
+          <button type="button" class="btn-secondary" onclick="addManualVariant()">
+            + Añadir
+          </button>
+        </div>
+        <button type="button" id="btn-suggest-ai" class="btn-secondary btn-ai" onclick="suggestWithAI()">
+          <span id="ai-btn-icon">✨</span> <span id="ai-btn-text">Sugerir con IA desde mi CV</span>
+        </button>
+      </div>
+
+      <div id="ai-status-msg" style="display:none; margin-bottom: 0.75rem; font-size: 0.84rem;"></div>
+
+      <!-- Listado visual interactivo -->
+      <div id="variants-container" class="variants-list"></div>
+      <div id="empty-variants-msg" style="display:none; text-align:center; padding: 1.5rem; color:#94a3b8; font-size:0.88rem; background:#f8fafc; border-radius:8px; border:1px dashed #cbd5e1;">
+        No tienes variantes configuradas. Añade alguna arriba o usa el botón de sugerencias IA.
+      </div>
+    </div>
+
+    <!-- BARRA FINAL CON EL ÚNICO BOTÓN DE GUARDAR -->
+    <div class="save-bar-footer">
+      <div class="save-info">
+        <div class="save-info-title">Listo para guardar</div>
+        <div class="save-info-desc">Aplica todas las modificaciones (CV, preferencias y variantes) en una sola operación segura.</div>
+      </div>
+      <div class="save-actions">
+        <a href="/dashboard" class="btn-cancel">← Volver al Dashboard</a>
+        <button type="submit" id="btn-main-submit" class="btn-save-primary">
+          💾 Guardar perfil y preferencias
+        </button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<script>
+// Estado de variantes en memoria (cargado inicialmente desde el backend)
+let variantsState = {{ variants | tojson }};
+
+function renderVariants() {
+  const container = document.getElementById('variants-container');
+  const emptyMsg = document.getElementById('empty-variants-msg');
+  container.innerHTML = '';
+
+  if (!variantsState || variantsState.length === 0) {
+    emptyMsg.style.display = 'block';
+    return;
+  }
+  emptyMsg.style.display = 'none';
+
+  variantsState.forEach((v, index) => {
+    const item = document.createElement('div');
+    item.className = 'variant-item' + (v.is_active ? '' : ' inactive');
+
+    const badgeClass = v.source === 'ai' ? 'badge-ai' : 'badge-manual';
+    const badgeText = v.source === 'ai' ? '✨ IA' : 'Manual';
+
+    item.innerHTML = `
+      <label class="switch-wrap" title="${v.is_active ? 'Búsqueda activa' : 'Búsqueda pausada'}">
+        <div class="switch">
+          <input type="checkbox" ${v.is_active ? 'checked' : ''} onchange="toggleVariant(${index})">
+          <span class="slider"></span>
+        </div>
+        <span style="width:50px;">${v.is_active ? 'Activa' : 'Pausa'}</span>
+      </label>
+
+      <input
+        type="text"
+        class="query-input"
+        value="${escapeHtml(v.query_text)}"
+        onchange="updateVariantText(${index}, this.value)"
+        placeholder="Texto de la búsqueda..."
+      >
+
+      <span class="variant-badge ${badgeClass}">${badgeText}</span>
+
+      <button type="button" class="btn-remove-variant" onclick="removeVariant(${index})" title="Eliminar variante">
+        ✕
+      </button>
+    `;
+    container.appendChild(item);
+  });
+}
+
+function escapeHtml(text) {
+  if (!text) return '';
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function addManualVariant() {
+  const input = document.getElementById('new_variant_input');
+  const val = input.value.trim();
+  if (!val) return;
+
+  // Evitar duplicados exactos
+  const exists = variantsState.some(v => v.query_text.toLowerCase() === val.toLowerCase());
+  if (exists) {
+    alert('Ya tienes una variante con esa misma búsqueda.');
+    return;
+  }
+
+  variantsState.push({
+    id: null,
+    query_text: val,
+    source: 'manual',
+    is_active: true
+  });
+  input.value = '';
+  renderVariants();
+}
+
+function toggleVariant(index) {
+  if (variantsState[index]) {
+    variantsState[index].is_active = !variantsState[index].is_active;
+    renderVariants();
+  }
+}
+
+function updateVariantText(index, newText) {
+  if (variantsState[index]) {
+    variantsState[index].query_text = newText.trim();
+  }
+}
+
+function removeVariant(index) {
+  variantsState.splice(index, 1);
+  renderVariants();
+}
+
+function suggestWithAI() {
+  const cvText = document.getElementById('raw_cv_text').value.trim();
+  const roleFamily = document.getElementById('role_family').value.trim();
+  const aiBtn = document.getElementById('btn-suggest-ai');
+  const btnIcon = document.getElementById('ai-btn-icon');
+  const btnText = document.getElementById('ai-btn-text');
+  const statusMsg = document.getElementById('ai-status-msg');
+
+  if (!cvText && !roleFamily) {
+    alert('Pega primero el texto de tu CV o escribe tus familias de rol en el formulario arriba para que la IA pueda sugerir variantes.');
+    return;
+  }
+
+  aiBtn.disabled = true;
+  aiBtn.style.opacity = '0.7';
+  btnIcon.innerText = '⏳';
+  btnText.innerText = 'Analizando CV...';
+  statusMsg.style.display = 'block';
+  statusMsg.style.color = '#6d28d9';
+  statusMsg.innerHTML = '<em>Generando sugerencias inteligentes a partir de tu perfil...</em>';
+
+  fetch('/api/onboarding/suggest-variants', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ raw_cv_text: cvText, role_family: roleFamily })
+  })
+  .then(r => r.json().then(data => ({ status: r.status, body: data })))
+  .then(res => {
+    aiBtn.disabled = false;
+    aiBtn.style.opacity = '1';
+    btnIcon.innerText = '✨';
+    btnText.innerText = 'Sugerir con IA desde mi CV';
+
+    if (res.status === 200 && res.body.variants) {
+      let addedCount = 0;
+      res.body.variants.forEach(q => {
+        const cleaned = q.trim();
+        if (cleaned && !variantsState.some(v => v.query_text.toLowerCase() === cleaned.toLowerCase())) {
+          variantsState.push({
+            id: null,
+            query_text: cleaned,
+            source: 'ai',
+            is_active: true
+          });
+          addedCount++;
+        }
+      });
+
+      renderVariants();
+      statusMsg.style.color = '#16a34a';
+      statusMsg.innerHTML = `✓ <strong>${addedCount} sugerencias añadidas al listado.</strong> Pulsa "Guardar perfil" abajo para confirmar los cambios.`;
+      setTimeout(() => { statusMsg.style.display = 'none'; }, 6000);
+    } else {
+      statusMsg.style.color = '#dc2626';
+      statusMsg.innerHTML = `Error: ${res.body.error || 'No se pudieron generar sugerencias.'}`;
+    }
+  })
+  .catch(err => {
+    aiBtn.disabled = false;
+    aiBtn.style.opacity = '1';
+    btnIcon.innerText = '✨';
+    btnText.innerText = 'Sugerir con IA desde mi CV';
+    statusMsg.style.color = '#dc2626';
+    statusMsg.innerHTML = 'Error de conexión con el servicio de IA.';
+  });
+}
+
+function handleFormSubmit(e) {
+  // Serializar el estado de variantes al campo oculto
+  const hiddenInput = document.getElementById('variants_json');
+  hiddenInput.value = JSON.stringify(variantsState);
+
+  const submitBtn = document.getElementById('btn-main-submit');
+  submitBtn.disabled = true;
+  submitBtn.style.opacity = '0.7';
+  submitBtn.innerHTML = '⏳ Guardando y extrayendo perfil...';
+  return true;
+}
+
+// Renderizado inicial al cargar la página
+document.addEventListener('DOMContentLoaded', renderVariants);
+</script>
 {% endblock %}

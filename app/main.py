@@ -252,6 +252,16 @@ def onboarding_form(request: Request, current_user: dict = Depends(get_current_u
         print(f"[onboarding] Error leyendo variantes del usuario {user_id}: {e}")
         variants = []
 
+    clean_variants = [
+        {
+            "id": v.get("id"),
+            "query_text": v.get("query_text", ""),
+            "source": v.get("source", "manual"),
+            "is_active": bool(v.get("is_active", True)),
+        }
+        for v in variants
+    ]
+
     return templates.TemplateResponse(
         "onboarding.html",
         {
@@ -259,7 +269,7 @@ def onboarding_form(request: Request, current_user: dict = Depends(get_current_u
             "current_user": current_user,
             "has_profile": profile is not None,
             "profile": profile,
-            "variants": variants,
+            "variants": clean_variants,
         },
     )
 
@@ -272,6 +282,7 @@ def onboarding_submit(
     remote_preference: str = Form("any"),
     role_family: str = Form(""),
     min_salary: str = Form(""),
+    variants_json: str = Form("[]"),
     current_user: dict = Depends(get_current_user),
 ):
     user_id = current_user["id"]
@@ -323,7 +334,56 @@ def onboarding_submit(
             },
         ).scalar()
 
-    # Sembrar variantes iniciales si no tiene ninguna (una vez committeado el profile)
+        # Sincronizar variantes si se envió variants_json
+        submitted_variants = None
+        if variants_json:
+            try:
+                submitted_variants = json.loads(variants_json)
+            except Exception as json_err:
+                print(f"[onboarding] Error parseando variants_json: {json_err}")
+
+        if isinstance(submitted_variants, list):
+            existing_rows = conn.execute(
+                text("SELECT id FROM search_query_variant WHERE user_id = :uid"),
+                {"uid": user_id},
+            ).fetchall()
+            existing_ids = {r[0] for r in existing_rows}
+
+            submitted_ids = {v["id"] for v in submitted_variants if v.get("id")}
+            to_delete = existing_ids - submitted_ids
+            if to_delete:
+                conn.execute(
+                    text("DELETE FROM search_query_variant WHERE id = ANY(:ids) AND user_id = :uid"),
+                    {"ids": list(to_delete), "uid": user_id},
+                )
+
+            for idx, item in enumerate(submitted_variants):
+                q_text = (item.get("query_text") or "").strip()
+                if not q_text:
+                    continue
+                is_active = bool(item.get("is_active", True))
+                source = item.get("source") or "manual"
+                item_id = item.get("id")
+
+                if item_id and item_id in existing_ids:
+                    conn.execute(
+                        text("""
+                            UPDATE search_query_variant
+                            SET query_text = :qt, is_active = :act, order_index = :idx, updated_at = now()
+                            WHERE id = :id AND user_id = :uid
+                        """),
+                        {"qt": q_text, "act": is_active, "idx": idx, "id": item_id, "uid": user_id},
+                    )
+                else:
+                    conn.execute(
+                        text("""
+                            INSERT INTO search_query_variant (profile_id, user_id, query_text, source, is_active, order_index)
+                            VALUES (:pid, :uid, :qt, :src, :act, :idx)
+                        """),
+                        {"pid": profile_id, "uid": user_id, "qt": q_text, "src": source, "act": is_active, "idx": idx},
+                    )
+
+    # Sembrar variantes iniciales si no tiene ninguna tras guardar
     with engine.connect() as conn:
         var_count = conn.execute(
             text("SELECT COUNT(*) FROM search_query_variant WHERE user_id = :uid"),
@@ -340,6 +400,50 @@ def onboarding_submit(
         seed_default_variants(engine, profile_id, profile_dict)
 
     return RedirectResponse(url="/dashboard", status_code=303)
+
+
+@app.post("/api/onboarding/suggest-variants")
+async def suggest_variants_api(request: Request, current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    cv_text = (body.get("raw_cv_text") or "").strip()
+    role_family = (body.get("role_family") or "").strip()
+    roles = [r.strip() for r in role_family.split(",") if r.strip()]
+
+    if not cv_text and not roles:
+        engine = get_engine()
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT raw_cv_text, role_family, extracted_json FROM profile WHERE user_id = :uid"),
+                {"uid": user_id},
+            ).mappings().first()
+            if row:
+                cv_text = row["raw_cv_text"] or ""
+                if not roles:
+                    roles = row["role_family"] or []
+
+    if not cv_text and not roles:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Escribe o pega primero el texto de tu CV o indica familias de rol."},
+        )
+
+    profile_mock = {
+        "extracted_json": {"skills": roles, "equivalent_roles": roles, "seniority": "mid"},
+        "role_family": roles,
+        "raw_cv_text": cv_text,
+    }
+
+    try:
+        suggestions = generate_variants_via_llm(profile_mock)
+        return {"variants": suggestions}
+    except Exception as e:
+        print(f"[suggest-variants] Error: {e}")
+        return JSONResponse(status_code=500, content={"error": f"Error al generar sugerencias: {e}"})
 
 
 

@@ -1,23 +1,46 @@
 name: evaluate_llm
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      max_calls:
+        description: 'Número máximo de ofertas a evaluar en esta tanda'
+        required: false
+        default: '50'
+      call_delay:
+        description: 'Pausa en segundos entre llamadas al LLM (evitar rate-limit)'
+        required: false
+        default: '2'
+
 concurrency:
   group: evaluate-llm
   cancel-in-progress: false
+
 jobs:
   run:
+    name: "OpenRouter LLM Evaluation"
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    env:
+      PYTHONUNBUFFERED: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install -r requirements.txt
-      - run: python pipeline/run_llm_evaluation.py
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run LLM Evaluation
+        run: python pipeline/run_llm_evaluation.py
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL_SCORING: ${{ vars.OPENROUTER_MODEL_SCORING }}
-          LLM_CALL_DELAY_SECONDS: '2'
-          LLM_MAX_CALLS_PER_RUN: '25'
+          LLM_CALL_DELAY_SECONDS: ${{ github.event.inputs.call_delay || '2' }}
+          LLM_MAX_CALLS_PER_RUN: ${{ github.event.inputs.max_calls || '50' }}
+

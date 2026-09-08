@@ -77,21 +77,102 @@ def load_profile(engine) -> dict | None:
     return profile
 
 
+def _render_summary_table(items: list[dict], user_stats: dict, total_pending_remaining: int, total_duration: float) -> str:
+    lines = [
+        "=" * 86,
+        "RESUMEN DE EVALUACIÓN CUALITATIVA CON LLM",
+        "=" * 86,
+        f"{'Usuario':<15} | {'Total':<6} | {'Apply (🌟)':<12} | {'Consider (🔍)':<14} | {'Skip (❌)':<10} | {'Errores':<8}",
+        "-" * 86,
+    ]
+    tot_eval = sum(s["total"] for s in user_stats.values())
+    tot_apply = sum(s["apply"] for s in user_stats.values())
+    tot_consider = sum(s["consider"] for s in user_stats.values())
+    tot_skip = sum(s["skip"] for s in user_stats.values())
+    tot_err = sum(s["errors"] for s in user_stats.values())
+
+    for uname, s in sorted(user_stats.items()):
+        lines.append(
+            f"{uname:<15} | {s['total']:<6} | {s['apply']:<12} | {s['consider']:<14} | {s['skip']:<10} | {s['errors']:<8}"
+        )
+    lines.append("-" * 86)
+    lines.append(
+        f"{'TOTAL':<15} | {tot_eval:<6} | {tot_apply:<12} | {tot_consider:<14} | {tot_skip:<10} | {tot_err:<8}"
+    )
+    lines.append(
+        f"Ofertas pendientes restantes en BD: {total_pending_remaining} | Tiempo total: {total_duration:.1f}s"
+    )
+    lines.append("=" * 86)
+    return "\n".join(lines)
+
+
+def _write_github_step_summary(items: list[dict], user_stats: dict, total_pending_remaining: int, total_duration: float):
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+
+    try:
+        md = []
+        md.append("## 🤖 Resumen de Evaluación LLM\n")
+        md.append(f"> **Duración total:** `{total_duration:.1f}s` | **Pendientes restantes en BD:** `{total_pending_remaining}`\n")
+
+        # Tabla por usuario
+        md.append("### 👥 Métricas por Usuario\n")
+        md.append("| Usuario | Evaluadas | 🌟 Apply | 🔍 Consider | ❌ Descartadas (Skip) | Errores |")
+        md.append("| :--- | :---: | :---: | :---: | :---: | :---: |")
+        for uname, s in sorted(user_stats.items()):
+            md.append(f"| **{uname}** | {s['total']} | {s['apply']} | {s['consider']} | {s['skip']} | {s['errors']} |")
+
+        tot_eval = sum(s["total"] for s in user_stats.values())
+        tot_apply = sum(s["apply"] for s in user_stats.values())
+        tot_consider = sum(s["consider"] for s in user_stats.values())
+        tot_skip = sum(s["skip"] for s in user_stats.values())
+        tot_err = sum(s["errors"] for s in user_stats.values())
+        md.append(f"| **TOTAL** | **{tot_eval}** | **{tot_apply}** | **{tot_consider}** | **{tot_skip}** | **{tot_err}** |\n")
+
+        # Tabla de ofertas evaluadas
+        if items:
+            md.append("### 📋 Ofertas Procesadas en esta Ejecución\n")
+            md.append("| # | Usuario | Oferta | Empresa | Score | Decisión | Salario | Tiempo |")
+            md.append("| :---: | :--- | :--- | :--- | :---: | :---: | :--- | :---: |")
+            for it in items:
+                dec_icon = "🌟 **Apply**" if it["recommendation"] == "apply" else ("❌ *Skip*" if it["recommendation"] == "skip" else "🔍 Consider")
+                sal_txt = it.get("salary") or "-"
+                md.append(
+                    f"| {it['job_id']} | `{it['user']}` | {it['title']} | {it['company']} | `{it['score']:.0f}` | {dec_icon} | {sal_txt} | `{it['duration']:.1f}s` |"
+                )
+            md.append("")
+
+        with open(summary_path, "a", encoding="utf-8") as f:
+            f.write("\n".join(md) + "\n")
+    except Exception as e:
+        print(f"[run_llm_evaluation] No se pudo escribir GITHUB_STEP_SUMMARY: {e}", flush=True)
+
+
 def main():
     engine = get_engine()
     started_at = datetime.now(timezone.utc)
     llm_calls = 0
     errors = []
+    evaluated_items = []
+    user_stats = {}
 
     try:
         with engine.connect() as conn:
+            # Contar total de pendientes en BD
+            total_pending_in_db = conn.execute(
+                text("SELECT COUNT(*) FROM job_score WHERE llm_evaluated = FALSE")
+            ).scalar() or 0
+
             pending = conn.execute(
                 text("""
                     SELECT js.id AS score_id, js.job_offer_id, js.vector_similarity, js.user_id,
+                           COALESCE(u.username, 'user_' || js.user_id) AS username,
                            p.extracted_json AS profile_json, p.remote_preference, p.min_salary, p.excluded_keywords,
                            jo.*
                     FROM job_score js
                     JOIN job_offer jo ON jo.id = js.job_offer_id
+                    LEFT JOIN app_user u ON u.id = js.user_id
                     JOIN profile p ON (p.id = js.profile_id OR p.user_id = js.user_id)
                     WHERE js.llm_evaluated = FALSE
                     ORDER BY js.vector_similarity DESC
@@ -100,25 +181,55 @@ def main():
                 {"limit": LLM_MAX_CALLS_PER_RUN},
             ).mappings().all()
 
+        total_to_process = len(pending)
+        print("\n" + "=" * 86, flush=True)
+        print("🚀 INICIO DE EVALUACIÓN CUALITATIVA CON LLM (OpenRouter)", flush=True)
+        print("=" * 86, flush=True)
+        print(f"📊 Ofertas pendientes totales en BD: {total_pending_in_db}", flush=True)
+        print(f"🎯 Tanda seleccionada para evaluar:  {total_to_process} (tope: {LLM_MAX_CALLS_PER_RUN})", flush=True)
+        print(f"⏱️  Pausa entre llamadas:            {LLM_CALL_DELAY_SECONDS}s", flush=True)
+        print("=" * 86 + "\n", flush=True)
+
         if not pending:
-            print("Sin ofertas pendientes de evaluacion LLM en este momento.")
+            print("✨ No hay ofertas pendientes de evaluación LLM en este momento.", flush=True)
 
         for i, row in enumerate(pending):
+            uname = row["username"]
+            if uname not in user_stats:
+                user_stats[uname] = {"total": 0, "apply": 0, "consider": 0, "skip": 0, "errors": 0}
+
+            job_title = row.get("title") or "Sin título"
+            company = row.get("company") or "Confidencial"
+            progress_pct = int(((i + 1) / total_to_process) * 100)
+
+            print(
+                f"[{i + 1}/{total_to_process}] ({progress_pct}%) ⏳ Evaluando job #{row['job_offer_id']} "
+                f"[{uname}] \"{job_title}\" @ {company}...",
+                flush=True,
+            )
+
+            t0 = time.time()
             user_profile = {
                 "extracted_json": row["profile_json"],
                 "remote_preference": row["remote_preference"],
                 "min_salary": row["min_salary"],
                 "excluded_keywords": row["excluded_keywords"],
             }
+
             try:
                 evaluation = evaluate_job_with_llm(user_profile["extracted_json"], dict(row), profile_meta=user_profile)
                 llm_calls += 1
             except Exception as e:
-                errors.append(f"LLM error en job {row['job_offer_id']}: {e}")
-                if LLM_CALL_DELAY_SECONDS > 0 and i < len(pending) - 1:
+                dur = time.time() - t0
+                err_msg = f"LLM error en job #{row['job_offer_id']} ({uname}): {e}"
+                errors.append(err_msg)
+                user_stats[uname]["errors"] += 1
+                print(f"       ⚠️  ERROR ({dur:.1f}s): {e}", flush=True)
+                if LLM_CALL_DELAY_SECONDS > 0 and i < total_to_process - 1:
                     time.sleep(LLM_CALL_DELAY_SECONDS)
                 continue
 
+            dur = time.time() - t0
             hard_score = hard_requirements_score(user_profile, dict(row))
             recommendation = evaluation.get("recommendation", "consider")
             final_score = compute_final_score(row["vector_similarity"], hard_score, evaluation["llm_score"], recommendation=recommendation)
@@ -130,13 +241,31 @@ def main():
             if is_skip:
                 missing = evaluation.get("missing_requirements") or []
                 discard_reason = f"Descarte automático IA: {missing[0]}" if missing else "Requisitos mínimos o años de experiencia no cumplidos."
-                print(f"  [x] DESCARTADA por IA (skip): '{row['title']}' ({row.get('company')}) -> {discard_reason}")
+                user_stats[uname]["skip"] += 1
+                print(f"       ❌ [SKIP] ({dur:.1f}s) Score: {final_score:.0f} | Motivo: {discard_reason}", flush=True)
+            elif recommendation == "apply":
+                user_stats[uname]["apply"] += 1
+                print(f"       🌟 [APPLY] ({dur:.1f}s) Score: {final_score:.0f} | Cumple perfil", flush=True)
             else:
-                print(f"  [+] EVALUADA ({recommendation}): '{row['title']}' ({row.get('company')}) -> score={final_score}")
+                user_stats[uname]["consider"] += 1
+                print(f"       🔍 [CONSIDER] ({dur:.1f}s) Score: {final_score:.0f}", flush=True)
+
+            user_stats[uname]["total"] += 1
 
             extracted_salary = evaluation.get("salary")
             if extracted_salary:
-                print(f"    💰 Salario detectado: '{extracted_salary}'")
+                print(f"          💰 Salario detectado: '{extracted_salary}'", flush=True)
+
+            evaluated_items.append({
+                "job_id": row["job_offer_id"],
+                "user": uname,
+                "title": job_title,
+                "company": company,
+                "recommendation": recommendation,
+                "score": final_score,
+                "salary": extracted_salary,
+                "duration": dur,
+            })
 
             with engine.begin() as conn:
                 conn.execute(
@@ -175,39 +304,66 @@ def main():
                         {"salary": extracted_salary, "job_offer_id": row["job_offer_id"]},
                     )
 
-            if LLM_CALL_DELAY_SECONDS > 0 and i < len(pending) - 1:
+            if LLM_CALL_DELAY_SECONDS > 0 and i < total_to_process - 1:
                 time.sleep(LLM_CALL_DELAY_SECONDS)
 
-        if len(pending) >= LLM_MAX_CALLS_PER_RUN:
+        if total_to_process >= LLM_MAX_CALLS_PER_RUN:
             errors.append(
-                f"Se alcanzo el tope de seguridad LLM_MAX_CALLS_PER_RUN={LLM_MAX_CALLS_PER_RUN} en esta ejecucion; "
-                "puede quedar backlog para la proxima tanda (dentro de unos minutos)."
+                f"Se alcanzó el tope LLM_MAX_CALLS_PER_RUN={LLM_MAX_CALLS_PER_RUN} en esta ejecución. "
+                "Las ofertas restantes se evaluarán en la próxima tanda."
             )
 
     except Exception:
         errors.append(traceback.format_exc())
     finally:
-        _log_run(engine, started_at, llm_calls, errors)
+        total_duration = (datetime.now(timezone.utc) - started_at).total_seconds()
+        
+        # Calcular restantes reales
+        remaining_pending = 0
+        try:
+            with engine.connect() as conn:
+                remaining_pending = conn.execute(
+                    text("SELECT COUNT(*) FROM job_score WHERE llm_evaluated = FALSE")
+                ).scalar() or 0
+        except Exception:
+            pass
+
+        summary_table = _render_summary_table(evaluated_items, user_stats, remaining_pending, total_duration)
+        print("\n" + summary_table + "\n", flush=True)
+
+        _write_github_step_summary(evaluated_items, user_stats, remaining_pending, total_duration)
+        _log_run(engine, started_at, llm_calls, errors, summary_table=summary_table)
 
 
-def _log_run(engine, started_at, llm_calls, errors):
-    with engine.begin() as conn:
-        conn.execute(
-            text("""
-                INSERT INTO run_log (started_at, finished_at, jsearch_calls_used, llm_calls_used, new_jobs_found, errors)
-                VALUES (:started_at, :finished_at, 0, :llm_calls, 0, :errors)
-            """),
-            {
-                "started_at": started_at,
-                "finished_at": datetime.now(timezone.utc),
-                "llm_calls": llm_calls,
-                "errors": "\n".join(errors) if errors else None,
-            },
-        )
+def _log_run(engine, started_at, llm_calls, errors, summary_table: str | None = None):
+    log_content = []
+    if summary_table:
+        log_content.append(summary_table)
     if errors:
-        print("Errores durante la evaluacion:", *errors, sep="\n")
-    print(f"Evaluacion LLM finalizada. LLM calls: {llm_calls}.")
+        log_content.append("INCIDENCIAS:\n" + "\n".join(errors))
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO run_log (started_at, finished_at, jsearch_calls_used, llm_calls_used, new_jobs_found, errors)
+                    VALUES (:started_at, :finished_at, 0, :llm_calls, 0, :errors)
+                """),
+                {
+                    "started_at": started_at,
+                    "finished_at": datetime.now(timezone.utc),
+                    "llm_calls": llm_calls,
+                    "errors": "\n\n".join(log_content) if log_content else None,
+                },
+            )
+    except Exception as e:
+        print(f"[run_llm_evaluation] No se pudo escribir run_log: {e}", flush=True)
+
+    if errors:
+        print(f"⚠️  Incidencias registradas ({len(errors)}):", *errors[:5], sep="\n  * ", flush=True)
+    print(f"✅ Evaluación LLM finalizada con éxito. Llamadas realizadas: {llm_calls}.\n", flush=True)
 
 
 if __name__ == "__main__":
     main()
+

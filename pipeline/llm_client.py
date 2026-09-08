@@ -43,7 +43,13 @@ def _call_openrouter(model: str, prompt: str, max_retries: int = 2) -> str:
             data = resp.json()
             return data["choices"][0]["message"]["content"]
         except httpx.HTTPStatusError as e:
-            raise LLMError(f"Error HTTP llamando a OpenRouter ({model}): {e}") from e
+            detail = ""
+            try:
+                err_json = e.response.json()
+                detail = f" - {err_json.get('error', {}).get('message', e.response.text)}"
+            except Exception:
+                detail = f" - {e.response.text[:200]}" if e.response.text else ""
+            raise LLMError(f"Error HTTP llamando a OpenRouter ({model}): {e}{detail}") from e
 
 
 def _extract_json(raw_text: str) -> dict:

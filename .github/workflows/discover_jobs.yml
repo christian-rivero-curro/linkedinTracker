@@ -30,3 +30,12 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           LINKEDIN_HOURS_AGO: '4'
           LINKEDIN_MAX_JOBS_PER_VARIANT: '25'
+      - name: Run LLM Evaluation
+        if: always()
+        run: python pipeline/run_llm_evaluation.py
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL_SCORING: ${{ vars.OPENROUTER_MODEL_SCORING }}
+          LLM_CALL_DELAY_SECONDS: '2'
+          LLM_MAX_CALLS_PER_RUN: '50'

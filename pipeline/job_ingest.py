@@ -165,9 +165,9 @@ def process_and_store_job(
     result = conn.execute(
         text("""
             INSERT INTO job_offer (external_id, title, company, location, remote_type,
-                description, apply_link, source, salary_min, salary_max, posted_at, embedding, variant_id)
+                description, apply_link, source, salary_min, salary_max, salary_raw, posted_at, embedding, variant_id)
             VALUES (:external_id, :title, :company, :location, :remote_type,
-                :description, :apply_link, :source, :salary_min, :salary_max, :posted_at, CAST(:embedding AS vector), :variant_id)
+                :description, :apply_link, :source, :salary_min, :salary_max, :salary_raw, :posted_at, CAST(:embedding AS vector), :variant_id)
             RETURNING id
         """),
         {
@@ -181,6 +181,7 @@ def process_and_store_job(
             "source": job.get("source", "other"),
             "salary_min": job.get("salary_min"),
             "salary_max": job.get("salary_max"),
+            "salary_raw": job.get("salary_raw"),
             "posted_at": posted_at,
             "embedding": to_pgvector_literal(job_embedding),
             "variant_id": variant_id,

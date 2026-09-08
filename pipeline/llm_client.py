@@ -76,3 +76,44 @@ def call_llm_json(model: str, prompt: str, retry_on_parse_error: bool = True) ->
         reinforced_prompt = prompt + "\n\nIMPORTANTE: responde UNICAMENTE con el JSON valido, sin texto adicional ni backticks."
         raw_retry = _call_openrouter(model, reinforced_prompt)
         return _extract_json(raw_retry)
+
+
+def call_llm_structured(
+    model: str,
+    prompt: str,
+    schema_cls,
+    max_retries: int = 1,
+):
+    """
+    Llama a OpenRouter y valida estrictamente la respuesta contra un modelo Pydantic.
+    Si la respuesta falla la validación de Pydantic o el parseo JSON, reintenta
+    retroalimentando el error y el esquema JSON al modelo para corregir la salida.
+    """
+    from pydantic import ValidationError
+
+    raw_prompt = prompt
+
+    for attempt in range(max_retries + 1):
+        try:
+            raw = _call_openrouter(model, raw_prompt)
+            data = _extract_json(raw)
+            if not isinstance(data, dict):
+                raise LLMError(f"Se esperaba un objeto JSON (dict) pero se obtuvo {type(data).__name__}")
+            return schema_cls.model_validate(data)
+        except (json.JSONDecodeError, LLMError, ValidationError) as e:
+            if attempt < max_retries:
+                schema_hint = ""
+                try:
+                    schema_hint = f"\nEsquema JSON requerido:\n{json.dumps(schema_cls.model_json_schema(), ensure_ascii=False, indent=2)}\n"
+                except Exception:
+                    pass
+                raw_prompt = (
+                    prompt
+                    + f"\n\nERROR PREVIO: La salida no cumplio con el esquema esperado ({e}).\n"
+                    + schema_hint
+                    + "Por favor responde UNICAMENTE con un objeto JSON valido que cumpla este esquema, sin texto adicional ni markdown."
+                )
+                time.sleep(1.0)
+            else:
+                raise LLMError(f"Error de validacion Pydantic tras {max_retries + 1} intentos con {model}: {e}") from e
+

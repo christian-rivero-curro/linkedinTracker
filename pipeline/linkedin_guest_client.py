@@ -548,6 +548,17 @@ class LinkedInGuestClient:
         remote_snippet = f"{title or ''} {location or ''} {' '.join(criteria_parts)} {description[:500]}"
         detected_remote = _detect_remote_type(remote_snippet)
 
+        # Detección de salario en badges / compensación si LinkedIn lo muestra
+        salary_el = (
+            soup.find("span", class_=lambda c: c and "compensation" in c)
+            or soup.find("div", class_=lambda c: c and "compensation" in c)
+            or soup.find("span", class_=lambda c: c and "salary" in c)
+            or soup.find("li", class_=lambda c: c and "compensation" in c)
+        )
+        salary_raw = _clean_text(salary_el.get_text()) if salary_el else None
+        if salary_raw and not any(char.isdigit() for char in salary_raw):
+            salary_raw = None
+
         return {
             "job_id": job_id,
             "title": title,
@@ -555,6 +566,7 @@ class LinkedInGuestClient:
             "location": location,
             "remote_type": detected_remote,
             "description": description,
+            "salary_raw": salary_raw,
             "posted_at": posted_at,
         }
 
@@ -602,6 +614,7 @@ class LinkedInGuestClient:
             description = (detail and detail.get("description")) or ""
             remote_type = (detail and detail.get("remote_type")) or _detect_remote_type(f"{title} {location_val}")
             posted_at = (detail and detail.get("posted_at")) or item.get("posted_at") or datetime.now(timezone.utc)
+            salary_val = (detail and detail.get("salary_raw")) or None
 
             job_dict = {
                 "external_id": f"linkedin_{job_id}",
@@ -614,6 +627,7 @@ class LinkedInGuestClient:
                 "source": "linkedin",
                 "salary_min": None,
                 "salary_max": None,
+                "salary_raw": salary_val,
                 "posted_at": posted_at.isoformat() if isinstance(posted_at, datetime) else str(posted_at),
             }
             jobs.append(job_dict)

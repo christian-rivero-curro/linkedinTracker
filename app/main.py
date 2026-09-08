@@ -210,7 +210,8 @@ def dashboard(
     query = """
         SELECT js.id, jo.title, jo.company, jo.location, jo.remote_type, jo.apply_link,
                jo.source, jo.posted_at, jo.fetched_at, jo.variant_id, sqv.query_text AS variant_query,
-               js.final_score, js.llm_score, js.status, js.llm_evaluated, js.recommendation, js.discard_reason
+               js.final_score, js.llm_score, js.status, js.llm_evaluated, js.recommendation, js.discard_reason,
+               jo.salary_raw
         FROM job_score js
         JOIN job_offer jo ON jo.id = js.job_offer_id
         LEFT JOIN search_query_variant sqv ON sqv.id = jo.variant_id
@@ -264,7 +265,7 @@ def dashboard_detail(request: Request, job_score_id: int):
             text("""
                 SELECT js.*, jo.title, jo.company, jo.location, jo.remote_type,
                        jo.description, jo.apply_link, jo.source, jo.posted_at, jo.fetched_at,
-                       jo.variant_id, sqv.query_text AS variant_query
+                       jo.variant_id, sqv.query_text AS variant_query, jo.salary_raw
                 FROM job_score js
                 JOIN job_offer jo ON jo.id = js.job_offer_id
                 LEFT JOIN search_query_variant sqv ON sqv.id = jo.variant_id

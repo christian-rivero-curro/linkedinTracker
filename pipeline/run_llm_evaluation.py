@@ -107,7 +107,7 @@ def main():
 
         for i, row in enumerate(pending):
             try:
-                evaluation = evaluate_job_with_llm(profile["extracted_json"], dict(row))
+                evaluation = evaluate_job_with_llm(profile["extracted_json"], dict(row), profile_meta=profile)
                 llm_calls += 1
             except Exception as e:
                 errors.append(f"LLM error en job {row['job_offer_id']}: {e}")
@@ -116,14 +116,36 @@ def main():
                 continue
 
             hard_score = hard_requirements_score(profile, dict(row))
-            final_score = compute_final_score(row["vector_similarity"], hard_score, evaluation["llm_score"])
+            recommendation = evaluation.get("recommendation", "consider")
+            final_score = compute_final_score(row["vector_similarity"], hard_score, evaluation["llm_score"], recommendation=recommendation)
+
+            is_skip = (recommendation == "skip")
+            new_status = "discarded" if is_skip else (row.get("status") or "new")
+            discard_reason = None
+            if is_skip:
+                missing = evaluation.get("missing_requirements") or []
+                discard_reason = f"Descarte automático IA: {missing[0]}" if missing else "Requisitos mínimos o años de experiencia no cumplidos."
+                print(f"  [x] DESCARTADA por IA (skip): '{row['title']}' ({row.get('company')}) -> {discard_reason}")
+            else:
+                print(f"  [+] EVALUADA ({recommendation}): '{row['title']}' ({row.get('company')}) -> score={final_score}")
+
+            extracted_salary = evaluation.get("salary")
+            if extracted_salary:
+                print(f"    💰 Salario detectado: '{extracted_salary}'")
 
             with engine.begin() as conn:
                 conn.execute(
                     text("""
-                        UPDATE job_score SET llm_score = :llm_score, llm_evaluated = TRUE,
-                            pros = :pros, cons = :cons, missing_requirements = :missing,
-                            recommendation = :recommendation, final_score = :final_score
+                        UPDATE job_score SET 
+                            llm_score = :llm_score, 
+                            llm_evaluated = TRUE,
+                            pros = :pros, 
+                            cons = :cons, 
+                            missing_requirements = :missing,
+                            recommendation = :recommendation, 
+                            final_score = :final_score,
+                            status = :status,
+                            discard_reason = COALESCE(discard_reason, :discard_reason)
                         WHERE id = :score_id
                     """),
                     {
@@ -131,11 +153,22 @@ def main():
                         "pros": evaluation["pros"],
                         "cons": evaluation["cons"],
                         "missing": evaluation["missing_requirements"],
-                        "recommendation": evaluation["recommendation"],
+                        "recommendation": recommendation,
                         "final_score": final_score,
+                        "status": new_status,
+                        "discard_reason": discard_reason,
                         "score_id": row["score_id"],
                     },
                 )
+
+                if extracted_salary:
+                    conn.execute(
+                        text("""
+                            UPDATE job_offer SET salary_raw = :salary
+                            WHERE id = :job_offer_id AND (salary_raw IS NULL OR salary_raw = '')
+                        """),
+                        {"salary": extracted_salary, "job_offer_id": row["job_offer_id"]},
+                    )
 
             if LLM_CALL_DELAY_SECONDS > 0 and i < len(pending) - 1:
                 time.sleep(LLM_CALL_DELAY_SECONDS)

@@ -14,7 +14,7 @@ class LLMError(Exception):
     pass
 
 
-def _call_openrouter(model: str, prompt: str, max_retries: int = 2) -> str:
+def _call_openrouter(model: str, prompt: str, max_retries: int = 3) -> str:
     api_key = os.environ["OPENROUTER_API_KEY"]
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -28,20 +28,89 @@ def _call_openrouter(model: str, prompt: str, max_retries: int = 2) -> str:
         "temperature": 0.2,
     }
 
+    current_model = model
     attempt = 0
+    fallback_used = False
+    fallback_model = "inclusionai/ling-3.0-flash-fin:free"
+
     while True:
         try:
-            with httpx.Client(timeout=60) as client:
+            with httpx.Client(timeout=45) as client:
                 resp = client.post(OPENROUTER_URL, headers=headers, json=payload)
-            if resp.status_code == 429:
+
+            # Reintentar si OpenRouter devuelve Rate Limit o caídas de servidor
+            if resp.status_code in (429, 500, 502, 503, 504):
                 if attempt >= max_retries:
-                    raise LLMError(f"Rate limit persistente en {model}")
-                time.sleep(2 ** attempt)
+                    if not fallback_used and current_model != fallback_model:
+                        print(f"⚠️ Modelo '{current_model}' con error {resp.status_code}. Cambiando a fallback '{fallback_model}'...", flush=True)
+                        current_model = fallback_model
+                        payload["model"] = current_model
+                        fallback_used = True
+                        attempt = 0
+                        time.sleep(1.0)
+                        continue
+                    raise LLMError(f"Error HTTP {resp.status_code} persistente en {current_model}")
+
+                wait_s = 2 ** attempt
+                time.sleep(wait_s)
                 attempt += 1
                 continue
+
             resp.raise_for_status()
             data = resp.json()
-            return data["choices"][0]["message"]["content"]
+
+            # Comprobar si OpenRouter devolvió un cuerpo de error a pesar de status 200/OK
+            if "error" in data:
+                err_info = data["error"]
+                err_msg = err_info.get("message") if isinstance(err_info, dict) else str(err_info)
+                if attempt < max_retries:
+                    time.sleep(2 ** attempt)
+                    attempt += 1
+                    continue
+                if not fallback_used and current_model != fallback_model:
+                    print(f"⚠️ Error de OpenRouter en '{current_model}': {err_msg}. Cambiando a fallback '{fallback_model}'...", flush=True)
+                    current_model = fallback_model
+                    payload["model"] = current_model
+                    fallback_used = True
+                    attempt = 0
+                    time.sleep(1.0)
+                    continue
+                raise LLMError(f"OpenRouter error ({current_model}): {err_msg}")
+
+            choices = data.get("choices")
+            if not choices or not isinstance(choices, list) or len(choices) == 0:
+                if attempt < max_retries:
+                    time.sleep(2 ** attempt)
+                    attempt += 1
+                    continue
+                if not fallback_used and current_model != fallback_model:
+                    print(f"⚠️ Respuesta sin 'choices' en '{current_model}'. Cambiando a fallback '{fallback_model}'...", flush=True)
+                    current_model = fallback_model
+                    payload["model"] = current_model
+                    fallback_used = True
+                    attempt = 0
+                    time.sleep(1.0)
+                    continue
+                raise LLMError(f"Respuesta inesperada de OpenRouter sin choices ({current_model}): {data}")
+
+            return choices[0]["message"]["content"]
+
+        except (httpx.TimeoutException, httpx.NetworkError) as net_err:
+            if attempt < max_retries:
+                wait_s = 2 ** attempt
+                time.sleep(wait_s)
+                attempt += 1
+                continue
+            if not fallback_used and current_model != fallback_model:
+                print(f"⚠️ Timeout/Red en '{current_model}'. Cambiando a fallback '{fallback_model}'...", flush=True)
+                current_model = fallback_model
+                payload["model"] = current_model
+                fallback_used = True
+                attempt = 0
+                time.sleep(1.0)
+                continue
+            raise LLMError(f"Error de conexión/timeout llamando a OpenRouter ({current_model}): {net_err}") from net_err
+
         except httpx.HTTPStatusError as e:
             detail = ""
             try:
@@ -49,7 +118,16 @@ def _call_openrouter(model: str, prompt: str, max_retries: int = 2) -> str:
                 detail = f" - {err_json.get('error', {}).get('message', e.response.text)}"
             except Exception:
                 detail = f" - {e.response.text[:200]}" if e.response.text else ""
-            raise LLMError(f"Error HTTP llamando a OpenRouter ({model}): {e}{detail}") from e
+
+            if not fallback_used and current_model != fallback_model:
+                print(f"⚠️ HTTP error en '{current_model}'. Cambiando a fallback '{fallback_model}'...", flush=True)
+                current_model = fallback_model
+                payload["model"] = current_model
+                fallback_used = True
+                attempt = 0
+                time.sleep(1.0)
+                continue
+            raise LLMError(f"Error HTTP llamando a OpenRouter ({current_model}): {e}{detail}") from e
 
 
 def _extract_json(raw_text: str) -> dict:

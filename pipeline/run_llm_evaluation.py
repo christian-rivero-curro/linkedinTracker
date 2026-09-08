@@ -65,6 +65,7 @@ def _int_env(name: str, default: int) -> int:
 
 LLM_CALL_DELAY_SECONDS = max(0.0, _float_env("LLM_CALL_DELAY_SECONDS", 2.0))
 LLM_MAX_CALLS_PER_RUN = max(1, _int_env("LLM_MAX_CALLS_PER_RUN", 100))
+LLM_MAX_CONSECUTIVE_ERRORS = max(1, _int_env("LLM_MAX_CONSECUTIVE_ERRORS", 3))
 
 
 def load_profile(engine) -> dict | None:
@@ -106,7 +107,7 @@ def _render_summary_table(items: list[dict], user_stats: dict, total_pending_rem
     return "\n".join(lines)
 
 
-def _write_github_step_summary(items: list[dict], user_stats: dict, total_pending_remaining: int, total_duration: float):
+def _write_github_step_summary(items: list[dict], user_stats: dict, total_pending_remaining: int, total_duration: float, circuit_breaker_triggered: bool = False):
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary_path:
         return
@@ -114,6 +115,8 @@ def _write_github_step_summary(items: list[dict], user_stats: dict, total_pendin
     try:
         md = []
         md.append("## 🤖 Resumen de Evaluación LLM\n")
+        if circuit_breaker_triggered:
+            md.append("> [!CAUTION]\n> **🛑 EJECUCIÓN DETENIDA POR CIRCUIT BREAKER:** Fallos consecutivos repetidos al conectar con el LLM. Se ha detenido la ejecución para evitar esperas inútiles. Las ofertas evaluadas antes del fallo se han guardado correctamente.\n")
         md.append(f"> **Duración total:** `{total_duration:.1f}s` | **Pendientes restantes en BD:** `{total_pending_remaining}`\n")
 
         # Tabla por usuario
@@ -156,6 +159,8 @@ def main():
     errors = []
     evaluated_items = []
     user_stats = {}
+    consecutive_errors = 0
+    circuit_breaker_triggered = False
 
     try:
         with engine.connect() as conn:
@@ -224,10 +229,26 @@ def main():
                 err_msg = f"LLM error en job #{row['job_offer_id']} ({uname}): {e}"
                 errors.append(err_msg)
                 user_stats[uname]["errors"] += 1
+                consecutive_errors += 1
                 print(f"       ⚠️  ERROR ({dur:.1f}s): {e}", flush=True)
+
+                if consecutive_errors >= LLM_MAX_CONSECUTIVE_ERRORS:
+                    circuit_breaker_triggered = True
+                    circuit_msg = (
+                        f"🛑 CIRCUIT BREAKER ACTIVADO: {consecutive_errors} llamadas consecutivas al LLM han fallado. "
+                        "El proveedor o modelo no responde adecuadamente. Se detiene la ejecución para evitar esperas inútiles."
+                    )
+                    print("\n" + "!" * 86, flush=True)
+                    print(circuit_msg, flush=True)
+                    print("!" * 86 + "\n", flush=True)
+                    errors.append(circuit_msg)
+                    break
+
                 if LLM_CALL_DELAY_SECONDS > 0 and i < total_to_process - 1:
                     time.sleep(LLM_CALL_DELAY_SECONDS)
                 continue
+
+            consecutive_errors = 0
 
             dur = time.time() - t0
             hard_score = hard_requirements_score(user_profile, dict(row))
@@ -331,7 +352,7 @@ def main():
         summary_table = _render_summary_table(evaluated_items, user_stats, remaining_pending, total_duration)
         print("\n" + summary_table + "\n", flush=True)
 
-        _write_github_step_summary(evaluated_items, user_stats, remaining_pending, total_duration)
+        _write_github_step_summary(evaluated_items, user_stats, remaining_pending, total_duration, circuit_breaker_triggered=circuit_breaker_triggered)
         _log_run(engine, started_at, llm_calls, errors, summary_table=summary_table)
 
 

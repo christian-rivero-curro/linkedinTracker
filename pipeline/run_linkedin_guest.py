@@ -59,11 +59,17 @@ LINKEDIN_HOURS_AGO = max(1, _int_env("LINKEDIN_HOURS_AGO", 4))
 LINKEDIN_MAX_JOBS_PER_VARIANT = max(1, _int_env("LINKEDIN_MAX_JOBS_PER_VARIANT", 25))
 
 
-def load_active_users(engine) -> list[dict]:
+def load_active_users(engine, target_user_id: int | None = None) -> list[dict]:
     with engine.connect() as conn:
-        rows = conn.execute(
-            text("SELECT id, username FROM app_user WHERE is_active = TRUE ORDER BY id ASC")
-        ).mappings().all()
+        if target_user_id is not None:
+            rows = conn.execute(
+                text("SELECT id, username FROM app_user WHERE is_active = TRUE AND id = :uid ORDER BY id ASC"),
+                {"uid": target_user_id},
+            ).mappings().all()
+        else:
+            rows = conn.execute(
+                text("SELECT id, username FROM app_user WHERE is_active = TRUE ORDER BY id ASC")
+            ).mappings().all()
     return [dict(r) for r in rows]
 
 
@@ -168,20 +174,25 @@ def _log_run_safe(engine, started_at: datetime, new_jobs_found: int, errors: lis
                 logger.error(f"No se pudo registrar la ejecución en run_log tras reintento: {e}")
 
 
-def main():
+def main(target_user_id: int | None = None) -> dict:
     started_at = datetime.now(timezone.utc)
     new_jobs_found = 0
     errors = []
     engine = None
     variant_stats = []
 
+    if target_user_id is None:
+        raw_uid = os.environ.get("TARGET_USER_ID")
+        if raw_uid and str(raw_uid).strip().isdigit():
+            target_user_id = int(str(raw_uid).strip())
+
     try:
         engine = get_engine()
-        active_users = load_active_users(engine)
+        active_users = load_active_users(engine, target_user_id=target_user_id)
         if not active_users:
-            msg = "No hay usuarios activos registrados en app_user. Regístrate en el portal primero."
+            msg = f"No hay usuarios activos registrados{' para ID ' + str(target_user_id) if target_user_id else ''} en app_user."
             logger.warning(msg)
-            return
+            return {"new_jobs_found": 0, "errors": [msg], "variant_stats": []}
 
         logger.info(f"Usuarios activos a procesar: {len(active_users)} {[u['username'] for u in active_users]}")
         circuit_broken = False
@@ -322,6 +333,12 @@ def main():
                 logger.warning(f"  * {err}")
 
         _log_run_safe(engine, started_at, new_jobs_found, errors, summary_text=summary_table)
+        return {
+            "new_jobs_found": new_jobs_found,
+            "errors": errors,
+            "variant_stats": variant_stats,
+            "duration_s": total_duration_s,
+        }
 
 
 if __name__ == "__main__":

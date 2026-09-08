@@ -152,7 +152,7 @@ def _write_github_step_summary(items: list[dict], user_stats: dict, total_pendin
         print(f"[run_llm_evaluation] No se pudo escribir GITHUB_STEP_SUMMARY: {e}", flush=True)
 
 
-def main():
+def main(target_user_id: int | None = None) -> dict:
     engine = get_engine()
     started_at = datetime.now(timezone.utc)
     llm_calls = 0
@@ -162,11 +162,21 @@ def main():
     consecutive_errors = 0
     circuit_breaker_triggered = False
 
+    if target_user_id is None:
+        raw_uid = os.environ.get("TARGET_USER_ID")
+        if raw_uid and str(raw_uid).strip().isdigit():
+            target_user_id = int(str(raw_uid).strip())
+
     try:
         with engine.connect() as conn:
-            # Contar total de pendientes en BD
+            # Contar total de pendientes en BD (filtrado si hay target_user_id)
             total_pending_in_db = conn.execute(
-                text("SELECT COUNT(*) FROM job_score WHERE llm_evaluated = FALSE")
+                text("""
+                    SELECT COUNT(*) FROM job_score 
+                    WHERE llm_evaluated = FALSE 
+                      AND (:target_user_id IS NULL OR user_id = :target_user_id)
+                """),
+                {"target_user_id": target_user_id},
             ).scalar() or 0
 
             pending = conn.execute(
@@ -180,15 +190,16 @@ def main():
                     LEFT JOIN app_user u ON u.id = js.user_id
                     JOIN profile p ON (p.id = js.profile_id OR p.user_id = js.user_id)
                     WHERE js.llm_evaluated = FALSE
+                      AND (:target_user_id IS NULL OR js.user_id = :target_user_id)
                     ORDER BY js.vector_similarity DESC
                     LIMIT :limit
                 """),
-                {"limit": LLM_MAX_CALLS_PER_RUN},
+                {"limit": LLM_MAX_CALLS_PER_RUN, "target_user_id": target_user_id},
             ).mappings().all()
 
         total_to_process = len(pending)
         print("\n" + "=" * 86, flush=True)
-        print("🚀 INICIO DE EVALUACIÓN CUALITATIVA CON LLM (OpenRouter)", flush=True)
+        print(f"🚀 INICIO DE EVALUACIÓN CUALITATIVA CON LLM (OpenRouter){' [Usuario ID: ' + str(target_user_id) + ']' if target_user_id else ''}", flush=True)
         print("=" * 86, flush=True)
         print(f"📊 Ofertas pendientes totales en BD: {total_pending_in_db}", flush=True)
         print(f"🎯 Tanda seleccionada para evaluar:  {total_to_process} (tope: {LLM_MAX_CALLS_PER_RUN})", flush=True)
@@ -354,6 +365,13 @@ def main():
 
         _write_github_step_summary(evaluated_items, user_stats, remaining_pending, total_duration, circuit_breaker_triggered=circuit_breaker_triggered)
         _log_run(engine, started_at, llm_calls, errors, summary_table=summary_table)
+        return {
+            "evaluated_count": len(evaluated_items),
+            "llm_calls": llm_calls,
+            "errors": errors,
+            "circuit_breaker_triggered": circuit_breaker_triggered,
+            "duration_s": total_duration,
+        }
 
 
 def _log_run(engine, started_at, llm_calls, errors, summary_table: str | None = None):

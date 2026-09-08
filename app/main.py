@@ -4,8 +4,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi import FastAPI, Request, Form, Depends, HTTPException, status
-from fastapi.responses import RedirectResponse
+from datetime import datetime, timezone
+from fastapi import FastAPI, Request, Form, Depends, HTTPException, status, BackgroundTasks
+from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
@@ -547,7 +548,93 @@ def update_job_status(job_score_id: int, payload: JobStatusUpdate, current_user:
         )
         if result.rowcount == 0:
             raise HTTPException(status_code=404, detail="Oferta no encontrada.")
-    return {"ok": True}
+# ---------------------------------------------------------------------------
+# BÚSQUEDA BAJO DEMANDA POR USUARIO (BACKGROUND TASK)
+# ---------------------------------------------------------------------------
+
+_discovery_tasks: dict[int, dict] = {}
+
+
+def _run_user_discovery_background(user_id: int, username: str):
+    _discovery_tasks[user_id] = {
+        "status": "running",
+        "stage": "linkedin_scrape",
+        "message": f"Buscando vacantes en LinkedIn para {username}...",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "new_jobs_found": 0,
+        "evaluated_count": 0,
+        "error": None,
+    }
+    try:
+        from pipeline.run_linkedin_guest import main as run_linkedin
+        from pipeline.run_llm_evaluation import main as run_llm
+
+        # 1. Scraping de LinkedIn para este usuario
+        linkedin_res = run_linkedin(target_user_id=user_id)
+        new_jobs = (linkedin_res or {}).get("new_jobs_found", 0)
+        _discovery_tasks[user_id]["new_jobs_found"] = new_jobs
+
+        # 2. Evaluación con LLM para las ofertas pendientes de este usuario
+        _discovery_tasks[user_id]["stage"] = "llm_evaluation"
+        _discovery_tasks[user_id]["message"] = f"Evaluando con LLM las vacantes de {username}..."
+
+        llm_res = run_llm(target_user_id=user_id)
+        eval_count = (llm_res or {}).get("evaluated_count", 0)
+        _discovery_tasks[user_id]["evaluated_count"] = eval_count
+
+        _discovery_tasks[user_id]["status"] = "completed"
+        _discovery_tasks[user_id]["stage"] = "done"
+        _discovery_tasks[user_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
+        _discovery_tasks[user_id]["message"] = (
+            f"Proceso finalizado: {new_jobs} nueva{'s' if new_jobs != 1 else ''} vacante{'s' if new_jobs != 1 else ''} "
+            f"y {eval_count} evaluada{'s' if eval_count != 1 else ''} con éxito."
+        )
+    except Exception as e:
+        _discovery_tasks[user_id]["status"] = "error"
+        _discovery_tasks[user_id]["error"] = str(e)
+        _discovery_tasks[user_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
+        _discovery_tasks[user_id]["message"] = f"Error durante la búsqueda: {e}"
+
+
+@app.post("/api/jobs/trigger-discovery")
+def trigger_user_discovery(
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user["id"]
+    username = current_user["username"]
+
+    current_task = _discovery_tasks.get(user_id)
+    if current_task and current_task.get("status") == "running":
+        return JSONResponse(
+            status_code=409,
+            content={
+                "status": "running",
+                "message": "Ya hay una búsqueda en curso para tu perfil.",
+                "stage": current_task.get("stage"),
+            },
+        )
+
+    _discovery_tasks[user_id] = {
+        "status": "running",
+        "stage": "starting",
+        "message": "Iniciando búsqueda de ofertas...",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "new_jobs_found": 0,
+        "evaluated_count": 0,
+        "error": None,
+    }
+    background_tasks.add_task(_run_user_discovery_background, user_id, username)
+    return {"status": "started", "message": f"Búsqueda iniciada para {username}."}
+
+
+@app.get("/api/jobs/discovery-status")
+def get_user_discovery_status(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+    task_info = _discovery_tasks.get(user_id)
+    if not task_info:
+        return {"status": "idle", "message": "No hay búsquedas recientes."}
+    return task_info
 
 
 if __name__ == "__main__":

@@ -2,7 +2,13 @@ name: discover_jobs
 on:
   schedule:
     - cron: '0 */4 * * *'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      target_user_id:
+        description: 'ID de usuario específico a procesar (dejar vacío para todos)'
+        required: false
+        default: ''
+
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -25,6 +31,7 @@ jobs:
           OPENROUTER_MODEL_EXTRACTION: ${{ vars.OPENROUTER_MODEL_EXTRACTION }}
           OPENROUTER_MODEL_SCORING: ${{ vars.OPENROUTER_MODEL_SCORING }}
           JSEARCH_MONTHLY_BUDGET: '180'
+          TARGET_USER_ID: ${{ github.event.inputs.target_user_id || '' }}
       - name: Run LinkedIn Guest Scraper
         if: always()
         run: python pipeline/run_linkedin_guest.py
@@ -32,6 +39,7 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           LINKEDIN_HOURS_AGO: '4'
           LINKEDIN_MAX_JOBS_PER_VARIANT: '25'
+          TARGET_USER_ID: ${{ github.event.inputs.target_user_id || '' }}
       - name: Run LLM Evaluation
         if: always()
         run: python pipeline/run_llm_evaluation.py
@@ -41,3 +49,5 @@ jobs:
           OPENROUTER_MODEL_SCORING: ${{ vars.OPENROUTER_MODEL_SCORING }}
           LLM_CALL_DELAY_SECONDS: '2'
           LLM_MAX_CALLS_PER_RUN: '50'
+          TARGET_USER_ID: ${{ github.event.inputs.target_user_id || '' }}
+

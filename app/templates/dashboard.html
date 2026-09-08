@@ -34,10 +34,18 @@
 </div>
 {% else %}
 <div class="card">
-  <h1>Ofertas rankeadas</h1>
-  <form method="post" action="/dashboard/clear-jobs" style="display:inline;" onsubmit="return confirm('¿Seguro que quieres eliminar TODAS las ofertas guardadas? Esta accion no se puede deshacer. No afecta a tu perfil ni a tus variantes de busqueda, pero reinicia su historial para que el proximo ciclo del cron vuelva a traer todo desde cero.');">
-    <button type="submit" style="background:#b91c1c;color:white;border:none;border-radius:4px;">Eliminar todas las ofertas</button>
-  </form>
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.75rem;margin-bottom:0.75rem;">
+    <h1 style="margin:0;">Ofertas rankeadas</h1>
+    <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+      <button id="btn-trigger-discovery" onclick="triggerDiscovery()" style="background:#2563eb;color:white;border:none;border-radius:4px;padding:0.45rem 0.9rem;font-weight:600;font-size:0.875rem;cursor:pointer;display:inline-flex;align-items:center;gap:0.4rem;transition:opacity 0.2s;">
+        <span id="btn-discovery-icon">🔍</span> <span id="btn-discovery-text">Buscar nuevas ofertas en LinkedIn</span>
+      </button>
+      <form method="post" action="/dashboard/clear-jobs" style="display:inline;" onsubmit="return confirm('¿Seguro que quieres eliminar TODAS tus ofertas guardadas? Esta acción no se puede deshacer. No afecta a tu perfil ni a tus variantes de búsqueda.');">
+        <button type="submit" style="background:#b91c1c;color:white;border:none;border-radius:4px;padding:0.45rem 0.75rem;font-size:0.875rem;cursor:pointer;">Eliminar mis ofertas</button>
+      </form>
+    </div>
+  </div>
+  <div id="discovery-status-banner" style="display:none;margin-bottom:1rem;padding:0.6rem 0.9rem;border-radius:6px;font-size:0.875rem;"></div>
   <p class="muted">
     Solo se listan aqui ofertas que ya tienen un resumen del LLM (pros, contras y requisitos evaluados) y que cumplen razonablemente los requisitos del puesto.
     {% if pending_llm_count and pending_llm_count > 0 %}
@@ -175,6 +183,116 @@ function restoreJob(id) {
     }
   });
 }
+
+let discoveryPollInterval = null;
+
+function checkDiscoveryStatus() {
+  fetch('/api/jobs/discovery-status')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      const btn = document.getElementById('btn-trigger-discovery');
+      const btnText = document.getElementById('btn-discovery-text');
+      const btnIcon = document.getElementById('btn-discovery-icon');
+      const banner = document.getElementById('discovery-status-banner');
+
+      if (data.status === 'running') {
+        if (btn) {
+          btn.disabled = true;
+          btn.style.opacity = '0.7';
+          btn.style.cursor = 'not-allowed';
+        }
+        if (btnIcon) btnIcon.innerText = '⏳';
+        if (btnText) btnText.innerText = 'Búsqueda en curso...';
+        if (banner) {
+          banner.style.display = 'block';
+          banner.style.background = '#eff6ff';
+          banner.style.color = '#1d4ed8';
+          banner.style.border = '1px solid #bfdbfe';
+          banner.innerHTML = '<strong>Búsqueda activa:</strong> ' + (data.message || 'Procesando en segundo plano...');
+        }
+        if (!discoveryPollInterval) {
+          discoveryPollInterval = setInterval(checkDiscoveryStatus, 3000);
+        }
+      } else {
+        if (discoveryPollInterval) {
+          clearInterval(discoveryPollInterval);
+          discoveryPollInterval = null;
+        }
+        if (btn) {
+          btn.disabled = false;
+          btn.style.opacity = '1';
+          btn.style.cursor = 'pointer';
+        }
+        if (btnIcon) btnIcon.innerText = '🔍';
+        if (btnText) btnText.innerText = 'Buscar nuevas ofertas en LinkedIn';
+
+        if (data.status === 'completed') {
+          if (banner && banner.getAttribute('data-notified') !== data.finished_at) {
+            banner.setAttribute('data-notified', data.finished_at);
+            banner.style.display = 'block';
+            banner.style.background = '#ecfdf5';
+            banner.style.color = '#047857';
+            banner.style.border = '1px solid #a7f3d0';
+            banner.innerHTML = '<strong>✓ ' + data.message + '</strong> Recargando página en 2 segundos...';
+            setTimeout(function() { location.reload(); }, 2500);
+          }
+        } else if (data.status === 'error') {
+          if (banner) {
+            banner.style.display = 'block';
+            banner.style.background = '#fef2f2';
+            banner.style.color = '#b91c1c';
+            banner.style.border = '1px solid #fecaca';
+            banner.innerHTML = '<strong>Aviso:</strong> ' + data.message;
+          }
+        }
+      }
+    })
+    .catch(function() {});
+}
+
+function triggerDiscovery() {
+  const btn = document.getElementById('btn-trigger-discovery');
+  const btnText = document.getElementById('btn-discovery-text');
+  const btnIcon = document.getElementById('btn-discovery-icon');
+  if (btn) {
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+    btn.style.cursor = 'not-allowed';
+  }
+  if (btnIcon) btnIcon.innerText = '⏳';
+  if (btnText) btnText.innerText = 'Iniciando búsqueda...';
+
+  fetch('/api/jobs/trigger-discovery', { method: 'POST' })
+    .then(function(r) {
+      return r.json().then(function(body) { return { status: r.status, body: body }; });
+    })
+    .then(function(res) {
+      if (res.status === 200 || res.status === 409) {
+        checkDiscoveryStatus();
+      } else {
+        alert(res.body.message || 'No se pudo iniciar la búsqueda.');
+        if (btn) {
+          btn.disabled = false;
+          btn.style.opacity = '1';
+          btn.style.cursor = 'pointer';
+        }
+        if (btnIcon) btnIcon.innerText = '🔍';
+        if (btnText) btnText.innerText = 'Buscar nuevas ofertas en LinkedIn';
+      }
+    })
+    .catch(function() {
+      alert('Error de conexión al iniciar la búsqueda.');
+      if (btn) {
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        btn.style.cursor = 'pointer';
+      }
+      if (btnIcon) btnIcon.innerText = '🔍';
+      if (btnText) btnText.innerText = 'Buscar nuevas ofertas en LinkedIn';
+    });
+}
+
+document.addEventListener('DOMContentLoaded', checkDiscoveryStatus);
 </script>
 {% endif %}
 {% endblock %}

@@ -80,11 +80,17 @@ def check_budget(engine) -> tuple[bool, int]:
     return can_run, jsearch_used
 
 
-def load_active_users(engine) -> list[dict]:
+def load_active_users(engine, target_user_id: int | None = None) -> list[dict]:
     with engine.connect() as conn:
-        rows = conn.execute(
-            text("SELECT id, username FROM app_user WHERE is_active = TRUE ORDER BY id ASC")
-        ).mappings().all()
+        if target_user_id is not None:
+            rows = conn.execute(
+                text("SELECT id, username FROM app_user WHERE is_active = TRUE AND id = :uid ORDER BY id ASC"),
+                {"uid": target_user_id},
+            ).mappings().all()
+        else:
+            rows = conn.execute(
+                text("SELECT id, username FROM app_user WHERE is_active = TRUE ORDER BY id ASC")
+            ).mappings().all()
     return [dict(r) for r in rows]
 
 
@@ -107,17 +113,22 @@ def _process_job(conn, raw, profile, cutoff, errors, variant_id) -> tuple[bool, 
     return process_and_store_job(conn, job, profile, cutoff, errors, variant_id, allowed_sources=allowed_sources)
 
 
-def main():
+def main(target_user_id: int | None = None):
     engine = get_engine()
     started_at = datetime.now(timezone.utc)
     jsearch_calls = 0
     new_jobs_found = 0
     errors = []
 
+    if target_user_id is None:
+        raw_uid = os.environ.get("TARGET_USER_ID")
+        if raw_uid and str(raw_uid).strip().isdigit():
+            target_user_id = int(str(raw_uid).strip())
+
     try:
-        active_users = load_active_users(engine)
+        active_users = load_active_users(engine, target_user_id=target_user_id)
         if not active_users:
-            print("No hay usuarios activos registrados en app_user.")
+            print(f"No hay usuarios activos registrados{' para ID ' + str(target_user_id) if target_user_id else ''} en app_user.")
             return
 
         can_run, jsearch_used_month = check_budget(engine)

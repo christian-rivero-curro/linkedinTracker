@@ -637,6 +637,15 @@ def get_user_discovery_status(current_user: dict = Depends(get_current_user)):
     return task_info
 
 
+@app.post("/api/jobs/discovery-ack")
+def acknowledge_user_discovery(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+    task_info = _discovery_tasks.get(user_id)
+    if task_info and task_info.get("status") in ("completed", "error"):
+        _discovery_tasks[user_id] = {"status": "idle", "message": "Listo."}
+    return {"ok": True}
+
+
 if __name__ == "__main__":
     import uvicorn
     host = os.environ.get("HOST", "127.0.0.1")

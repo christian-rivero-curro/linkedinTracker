@@ -227,17 +227,24 @@ function checkDiscoveryStatus() {
         if (btnText) btnText.innerText = 'Buscar nuevas ofertas en LinkedIn';
 
         if (data.status === 'completed') {
-          if (banner && banner.getAttribute('data-notified') !== data.finished_at) {
-            banner.setAttribute('data-notified', data.finished_at);
+          const lastAck = sessionStorage.getItem('discovery_last_ack');
+          if (banner && lastAck !== data.finished_at) {
+            sessionStorage.setItem('discovery_last_ack', data.finished_at);
+            fetch('/api/jobs/discovery-ack', { method: 'POST' }).catch(function() {});
             banner.style.display = 'block';
             banner.style.background = '#ecfdf5';
             banner.style.color = '#047857';
             banner.style.border = '1px solid #a7f3d0';
-            banner.innerHTML = '<strong>✓ ' + data.message + '</strong> Recargando página en 2 segundos...';
-            setTimeout(function() { location.reload(); }, 2500);
+            banner.innerHTML = '<strong>✓ ' + data.message + '</strong> Actualizando listado...';
+            setTimeout(function() { location.reload(); }, 1500);
+          } else if (banner && lastAck === data.finished_at) {
+            banner.style.display = 'none';
           }
         } else if (data.status === 'error') {
-          if (banner) {
+          const lastErrorAck = sessionStorage.getItem('discovery_last_error');
+          if (banner && lastErrorAck !== data.finished_at) {
+            sessionStorage.setItem('discovery_last_error', data.finished_at);
+            fetch('/api/jobs/discovery-ack', { method: 'POST' }).catch(function() {});
             banner.style.display = 'block';
             banner.style.background = '#fef2f2';
             banner.style.color = '#b91c1c';
@@ -251,6 +258,9 @@ function checkDiscoveryStatus() {
 }
 
 function triggerDiscovery() {
+  sessionStorage.removeItem('discovery_last_ack');
+  sessionStorage.removeItem('discovery_last_error');
+
   const btn = document.getElementById('btn-trigger-discovery');
   const btnText = document.getElementById('btn-discovery-text');
   const btnIcon = document.getElementById('btn-discovery-icon');

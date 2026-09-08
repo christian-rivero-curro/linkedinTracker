@@ -142,13 +142,16 @@ def process_and_store_job(
             print(f"  [job_ingest] DESCARTADA '{label}': coincide con excluded_keywords del perfil.")
         return True, posted_at, False
 
+    user_id = profile.get("user_id")
+    profile_id = profile.get("id") or 1
+
     existing = conn.execute(
-        text("SELECT id FROM job_offer WHERE external_id = :eid"),
-        {"eid": job["external_id"]},
+        text("SELECT id FROM job_offer WHERE user_id = :uid AND external_id = :eid"),
+        {"uid": user_id, "eid": job["external_id"]},
     ).first()
     if existing:
         if verbose:
-            print(f"  [job_ingest] DESCARTADA '{label}': ya existe en job_offer (external_id duplicado, id={existing[0]}).")
+            print(f"  [job_ingest] DESCARTADA '{label}': ya existe en job_offer del usuario (external_id duplicado, id={existing[0]}).")
         return True, posted_at, False
 
     embed_input = f"{title} {description}".strip() or "oferta sin descripcion"
@@ -164,13 +167,14 @@ def process_and_store_job(
 
     result = conn.execute(
         text("""
-            INSERT INTO job_offer (external_id, title, company, location, remote_type,
+            INSERT INTO job_offer (user_id, external_id, title, company, location, remote_type,
                 description, apply_link, source, salary_min, salary_max, salary_raw, posted_at, embedding, variant_id)
-            VALUES (:external_id, :title, :company, :location, :remote_type,
+            VALUES (:user_id, :external_id, :title, :company, :location, :remote_type,
                 :description, :apply_link, :source, :salary_min, :salary_max, :salary_raw, :posted_at, CAST(:embedding AS vector), :variant_id)
             RETURNING id
         """),
         {
+            "user_id": user_id,
             "external_id": job["external_id"],
             "title": title,
             "company": job.get("company"),
@@ -191,12 +195,19 @@ def process_and_store_job(
 
     conn.execute(
         text("""
-            INSERT INTO job_score (job_offer_id, profile_id, vector_similarity, llm_evaluated, final_score)
-            VALUES (:job_offer_id, 1, :similarity, FALSE, :final_score)
+            INSERT INTO job_score (job_offer_id, profile_id, user_id, vector_similarity, llm_evaluated, final_score)
+            VALUES (:job_offer_id, :profile_id, :user_id, :similarity, FALSE, :final_score)
             ON CONFLICT (job_offer_id, profile_id) DO NOTHING
         """),
-        {"job_offer_id": job_offer_id, "similarity": similarity, "final_score": similarity * 100},
+        {
+            "job_offer_id": job_offer_id,
+            "profile_id": profile_id,
+            "user_id": user_id,
+            "similarity": similarity,
+            "final_score": similarity * 100,
+        },
     )
     if verbose:
-        print(f"  [job_ingest] INSERTADA '{label}' (job_offer.id={job_offer_id}, similitud={similarity:.3f}).")
+        print(f"  [job_ingest] INSERTADA '{label}' (job_offer.id={job_offer_id}, user_id={user_id}, similitud={similarity:.3f}).")
     return True, posted_at, True
+

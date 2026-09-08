@@ -84,17 +84,15 @@ def main():
     errors = []
 
     try:
-        profile = load_profile(engine)
-        if profile is None:
-            errors.append("No hay perfil configurado (profile.id=1). Completa el onboarding primero.")
-            return
-
         with engine.connect() as conn:
             pending = conn.execute(
                 text("""
-                    SELECT js.id AS score_id, js.job_offer_id, js.vector_similarity, jo.*
+                    SELECT js.id AS score_id, js.job_offer_id, js.vector_similarity, js.user_id,
+                           p.extracted_json AS profile_json, p.remote_preference, p.min_salary, p.excluded_keywords,
+                           jo.*
                     FROM job_score js
                     JOIN job_offer jo ON jo.id = js.job_offer_id
+                    JOIN profile p ON (p.id = js.profile_id OR p.user_id = js.user_id)
                     WHERE js.llm_evaluated = FALSE
                     ORDER BY js.vector_similarity DESC
                     LIMIT :limit
@@ -106,8 +104,14 @@ def main():
             print("Sin ofertas pendientes de evaluacion LLM en este momento.")
 
         for i, row in enumerate(pending):
+            user_profile = {
+                "extracted_json": row["profile_json"],
+                "remote_preference": row["remote_preference"],
+                "min_salary": row["min_salary"],
+                "excluded_keywords": row["excluded_keywords"],
+            }
             try:
-                evaluation = evaluate_job_with_llm(profile["extracted_json"], dict(row), profile_meta=profile)
+                evaluation = evaluate_job_with_llm(user_profile["extracted_json"], dict(row), profile_meta=user_profile)
                 llm_calls += 1
             except Exception as e:
                 errors.append(f"LLM error en job {row['job_offer_id']}: {e}")
@@ -115,12 +119,13 @@ def main():
                     time.sleep(LLM_CALL_DELAY_SECONDS)
                 continue
 
-            hard_score = hard_requirements_score(profile, dict(row))
+            hard_score = hard_requirements_score(user_profile, dict(row))
             recommendation = evaluation.get("recommendation", "consider")
             final_score = compute_final_score(row["vector_similarity"], hard_score, evaluation["llm_score"], recommendation=recommendation)
 
             is_skip = (recommendation == "skip")
             new_status = "discarded" if is_skip else (row.get("status") or "new")
+
             discard_reason = None
             if is_skip:
                 missing = evaluation.get("missing_requirements") or []

@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Request, Form, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -13,9 +13,19 @@ from dotenv import load_dotenv
 
 from app.db import get_engine
 from app.schemas import JobStatusUpdate
+from app.auth import (
+    get_current_user,
+    get_current_user_optional,
+    can_register_user,
+    hash_password,
+    verify_password,
+    create_session_token,
+    SESSION_COOKIE_NAME,
+    get_max_users,
+)
 from pipeline.cv_extractor import extract_cv
 from pipeline.embeddings import embed_text, to_pgvector_literal
-from pipeline.query_variants import get_all_variants, generate_variants_via_llm, add_ai_variants
+from pipeline.query_variants import get_all_variants, generate_variants_via_llm, add_ai_variants, seed_default_variants
 
 load_dotenv()
 
@@ -25,32 +35,231 @@ templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
 
+# ---------------------------------------------------------------------------
+# RUTAS DE AUTENTICACIÓN
+# ---------------------------------------------------------------------------
+
+@app.get("/login")
+def login_form(request: Request, next: str = ""):
+    user = get_current_user_optional(request)
+    if user:
+        return RedirectResponse(url="/dashboard", status_code=303)
+    return templates.TemplateResponse(
+        "login.html",
+        {"request": request, "current_user": None, "next": next, "error": None, "message": None},
+    )
+
+
+@app.post("/login")
+def login_submit(request: Request, username: str = Form(...), password: str = Form(...), next: str = Form("")):
+    clean_user = username.strip()
+    engine = get_engine()
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT id, username, password_hash, is_active FROM app_user WHERE lower(username) = lower(:u)"),
+            {"u": clean_user},
+        ).mappings().first()
+
+    if not row or not verify_password(password, row["password_hash"]):
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "current_user": None, "next": next, "error": "Usuario o contraseña incorrectos.", "message": None},
+            status_code=400,
+        )
+
+    if not row["is_active"]:
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "current_user": None, "next": next, "error": "Esta cuenta de usuario está desactivada.", "message": None},
+            status_code=403,
+        )
+
+    token = create_session_token(row["id"], row["username"])
+    redirect_url = next if (next and next.startswith("/")) else "/dashboard"
+    resp = RedirectResponse(url=redirect_url, status_code=303)
+    resp.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=86400 * 14,
+    )
+    return resp
+
+
+@app.get("/register")
+def register_form(request: Request):
+    user = get_current_user_optional(request)
+    if user:
+        return RedirectResponse(url="/dashboard", status_code=303)
+
+    engine = get_engine()
+    can_reg, cur_count, max_u = can_register_user(engine)
+    return templates.TemplateResponse(
+        "register.html",
+        {
+            "request": request,
+            "current_user": None,
+            "can_register": can_reg,
+            "current_count": cur_count,
+            "max_users": max_u,
+            "error": None,
+        },
+    )
+
+
+@app.post("/register")
+def register_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    password_confirm: str = Form(...),
+):
+    engine = get_engine()
+    can_reg, cur_count, max_u = can_register_user(engine)
+    if not can_reg:
+        return templates.TemplateResponse(
+            "register.html",
+            {
+                "request": request,
+                "current_user": None,
+                "can_register": False,
+                "current_count": cur_count,
+                "max_users": max_u,
+                "error": f"Límite máximo de usuarios alcanzado ({cur_count}/{max_u}).",
+            },
+            status_code=400,
+        )
+
+    clean_user = username.strip()
+    if len(clean_user) < 3:
+        return templates.TemplateResponse(
+            "register.html",
+            {
+                "request": request,
+                "current_user": None,
+                "can_register": True,
+                "current_count": cur_count,
+                "max_users": max_u,
+                "error": "El nombre de usuario debe tener al menos 3 caracteres.",
+            },
+            status_code=400,
+        )
+
+    if len(password) < 4:
+        return templates.TemplateResponse(
+            "register.html",
+            {
+                "request": request,
+                "current_user": None,
+                "can_register": True,
+                "current_count": cur_count,
+                "max_users": max_u,
+                "error": "La contraseña debe tener al menos 4 caracteres.",
+            },
+            status_code=400,
+        )
+
+    if password != password_confirm:
+        return templates.TemplateResponse(
+            "register.html",
+            {
+                "request": request,
+                "current_user": None,
+                "can_register": True,
+                "current_count": cur_count,
+                "max_users": max_u,
+                "error": "Las contraseñas no coinciden.",
+            },
+            status_code=400,
+        )
+
+    # Verificar si el usuario ya existe
+    with engine.connect() as conn:
+        existing = conn.execute(
+            text("SELECT id FROM app_user WHERE lower(username) = lower(:u)"),
+            {"u": clean_user},
+        ).first()
+
+    if existing:
+        return templates.TemplateResponse(
+            "register.html",
+            {
+                "request": request,
+                "current_user": None,
+                "can_register": True,
+                "current_count": cur_count,
+                "max_users": max_u,
+                "error": f"El nombre de usuario '{clean_user}' ya está registrado.",
+            },
+            status_code=400,
+        )
+
+    pwd_hash = hash_password(password)
+    with engine.begin() as conn:
+        new_user_id = conn.execute(
+            text("INSERT INTO app_user (username, password_hash) VALUES (:u, :p) RETURNING id"),
+            {"u": clean_user, "p": pwd_hash},
+        ).scalar()
+
+    token = create_session_token(new_user_id, clean_user)
+    resp = RedirectResponse(url="/onboarding", status_code=303)
+    resp.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=86400 * 14,
+    )
+    return resp
+
+
+@app.post("/logout")
+@app.get("/logout")
+def logout():
+    resp = RedirectResponse(url="/login", status_code=303)
+    resp.delete_cookie(key=SESSION_COOKIE_NAME)
+    return resp
+
+
+# ---------------------------------------------------------------------------
+# RUTAS PROTEGIDAS
+# ---------------------------------------------------------------------------
+
 @app.get("/")
 def root():
     return RedirectResponse(url="/dashboard")
 
 
 @app.get("/onboarding")
-def onboarding_form(request: Request):
+def onboarding_form(request: Request, current_user: dict = Depends(get_current_user)):
     engine = get_engine()
+    user_id = current_user["id"]
     with engine.connect() as conn:
         row = conn.execute(
             text("""
                 SELECT raw_cv_text, location_preference, remote_preference, role_family, min_salary
-                FROM profile WHERE id = 1
-            """)
+                FROM profile WHERE user_id = :uid
+            """),
+            {"uid": user_id},
         ).mappings().first()
     profile = dict(row) if row else None
 
     try:
-        variants = get_all_variants(engine, profile_id=1)
+        variants = get_all_variants(engine, user_id=user_id)
     except Exception as e:
-        print(f"[onboarding] No se pudieron leer las variantes de busqueda (¿migracion aplicada?): {e}")
+        print(f"[onboarding] Error leyendo variantes del usuario {user_id}: {e}")
         variants = []
 
     return templates.TemplateResponse(
         "onboarding.html",
-        {"request": request, "has_profile": profile is not None, "profile": profile, "variants": variants},
+        {
+            "request": request,
+            "current_user": current_user,
+            "has_profile": profile is not None,
+            "profile": profile,
+            "variants": variants,
+        },
     )
 
 
@@ -62,7 +271,9 @@ def onboarding_submit(
     remote_preference: str = Form("any"),
     role_family: str = Form(""),
     min_salary: str = Form(""),
+    current_user: dict = Depends(get_current_user),
 ):
+    user_id = current_user["id"]
     try:
         extracted = extract_cv(raw_cv_text)
     except Exception as e:
@@ -82,13 +293,13 @@ def onboarding_submit(
 
     engine = get_engine()
     with engine.begin() as conn:
-        conn.execute(
+        profile_id = conn.execute(
             text("""
-                INSERT INTO profile (id, raw_cv_text, extracted_json, embedding, location_preference,
+                INSERT INTO profile (user_id, raw_cv_text, extracted_json, embedding, location_preference,
                     remote_preference, role_family, min_salary)
-                VALUES (1, :raw_cv_text, CAST(:extracted_json AS jsonb), CAST(:embedding AS vector), :location_preference,
+                VALUES (:user_id, :raw_cv_text, CAST(:extracted_json AS jsonb), CAST(:embedding AS vector), :location_preference,
                     :remote_preference, :role_family, :min_salary)
-                ON CONFLICT (id) DO UPDATE SET
+                ON CONFLICT (user_id) DO UPDATE SET
                     raw_cv_text = EXCLUDED.raw_cv_text,
                     extracted_json = EXCLUDED.extracted_json,
                     embedding = EXCLUDED.embedding,
@@ -97,8 +308,10 @@ def onboarding_submit(
                     role_family = EXCLUDED.role_family,
                     min_salary = EXCLUDED.min_salary,
                     updated_at = now()
+                RETURNING id
             """),
             {
+                "user_id": user_id,
                 "raw_cv_text": raw_cv_text,
                 "extracted_json": json.dumps(extracted),
                 "embedding": to_pgvector_literal(embedding),
@@ -107,92 +320,112 @@ def onboarding_submit(
                 "role_family": roles,
                 "min_salary": salary,
             },
-        )
+        ).scalar()
+
+    # Sembrar variantes iniciales si no tiene ninguna (una vez committeado el profile)
+    with engine.connect() as conn:
+        var_count = conn.execute(
+            text("SELECT COUNT(*) FROM search_query_variant WHERE user_id = :uid"),
+            {"uid": user_id},
+        ).scalar()
+
+    if not var_count:
+        profile_dict = {
+            "id": profile_id,
+            "user_id": user_id,
+            "extracted_json": extracted,
+            "role_family": roles,
+        }
+        seed_default_variants(engine, profile_id, profile_dict)
+
     return RedirectResponse(url="/dashboard", status_code=303)
 
 
+
 @app.post("/onboarding/variants/add")
-def add_variant(query_text: str = Form(...)):
+def add_variant(query_text: str = Form(...), current_user: dict = Depends(get_current_user)):
     cleaned = query_text.strip()
+    user_id = current_user["id"]
     if cleaned:
         engine = get_engine()
         with engine.connect() as conn:
+            p_id = conn.execute(text("SELECT id FROM profile WHERE user_id = :uid"), {"uid": user_id}).scalar()
             max_order = conn.execute(
-                text("SELECT COALESCE(MAX(order_index), -1) FROM search_query_variant WHERE profile_id = 1")
+                text("SELECT COALESCE(MAX(order_index), -1) FROM search_query_variant WHERE user_id = :uid"),
+                {"uid": user_id},
             ).scalar()
         with engine.begin() as conn:
             conn.execute(
                 text("""
-                    INSERT INTO search_query_variant (profile_id, query_text, source, order_index)
-                    VALUES (1, :qt, 'manual', :order_index)
+                    INSERT INTO search_query_variant (profile_id, user_id, query_text, source, order_index)
+                    VALUES (:pid, :uid, :qt, 'manual', :order_index)
                 """),
-                {"qt": cleaned, "order_index": max_order + 1},
+                {"pid": p_id, "uid": user_id, "qt": cleaned, "order_index": max_order + 1},
             )
     return RedirectResponse(url="/onboarding", status_code=303)
 
 
 @app.post("/onboarding/variants/{variant_id}/update")
-def update_variant(variant_id: int, query_text: str = Form(...)):
+def update_variant(variant_id: int, query_text: str = Form(...), current_user: dict = Depends(get_current_user)):
     cleaned = query_text.strip()
+    user_id = current_user["id"]
     if cleaned:
         engine = get_engine()
         with engine.begin() as conn:
             conn.execute(
                 text("""
                     UPDATE search_query_variant SET query_text = :qt, updated_at = now()
-                    WHERE id = :id AND profile_id = 1
+                    WHERE id = :id AND user_id = :uid
                 """),
-                {"qt": cleaned, "id": variant_id},
+                {"qt": cleaned, "id": variant_id, "uid": user_id},
             )
     return RedirectResponse(url="/onboarding", status_code=303)
 
 
 @app.post("/onboarding/variants/{variant_id}/toggle")
-def toggle_variant(variant_id: int):
+def toggle_variant(variant_id: int, current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
     engine = get_engine()
     with engine.begin() as conn:
         conn.execute(
             text("""
                 UPDATE search_query_variant SET is_active = NOT is_active, updated_at = now()
-                WHERE id = :id AND profile_id = 1
+                WHERE id = :id AND user_id = :uid
             """),
-            {"id": variant_id},
+            {"id": variant_id, "uid": user_id},
         )
     return RedirectResponse(url="/onboarding", status_code=303)
 
 
 @app.post("/onboarding/variants/{variant_id}/delete")
-def delete_variant(variant_id: int):
+def delete_variant(variant_id: int, current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
     engine = get_engine()
     with engine.begin() as conn:
         conn.execute(
-            text("DELETE FROM search_query_variant WHERE id = :id AND profile_id = 1"),
-            {"id": variant_id},
+            text("DELETE FROM search_query_variant WHERE id = :id AND user_id = :uid"),
+            {"id": variant_id, "uid": user_id},
         )
     return RedirectResponse(url="/onboarding", status_code=303)
 
 
 @app.post("/onboarding/variants/generate")
-def generate_variants():
+def generate_variants(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
     engine = get_engine()
     with engine.connect() as conn:
-        row = conn.execute(text("SELECT * FROM profile WHERE id = 1")).mappings().first()
+        row = conn.execute(text("SELECT * FROM profile WHERE user_id = :uid"), {"uid": user_id}).mappings().first()
     if row is not None:
         profile = dict(row)
         try:
             suggestions = generate_variants_via_llm(profile)
-            add_ai_variants(engine, 1, suggestions)
+            add_ai_variants(engine, profile["id"], suggestions, user_id=user_id)
         except Exception as e:
-            print(f"[onboarding] Error generando variantes con IA: {e}")
+            print(f"[onboarding] Error generando variantes con IA para user {user_id}: {e}")
     return RedirectResponse(url="/onboarding", status_code=303)
 
 
 def _parse_bool_param(value: str) -> bool:
-    """
-    Convierte un parametro de query string en booleano de forma tolerante.
-    Cualquier valor vacio, '0' o 'false' (case-insensitive) se trata como
-    False; el resto (incluido '1', 'true', 'on') se trata como True.
-    """
     return value.strip().lower() not in ("", "0", "false", "no")
 
 
@@ -203,10 +436,13 @@ def dashboard(
     show_skipped: str = "",
     show_discarded: str = "",
     variant_id: str = "all",
+    current_user: dict = Depends(get_current_user),
 ):
     show_skipped_bool = _parse_bool_param(show_skipped)
     show_discarded_bool = _parse_bool_param(show_discarded)
+    user_id = current_user["id"]
     engine = get_engine()
+
     query = """
         SELECT js.id, jo.title, jo.company, jo.location, jo.remote_type, jo.apply_link,
                jo.source, jo.posted_at, jo.fetched_at, jo.variant_id, sqv.query_text AS variant_query,
@@ -215,9 +451,9 @@ def dashboard(
         FROM job_score js
         JOIN job_offer jo ON jo.id = js.job_offer_id
         LEFT JOIN search_query_variant sqv ON sqv.id = jo.variant_id
-        WHERE js.profile_id = 1 AND js.llm_evaluated = TRUE
+        WHERE js.user_id = :user_id AND js.llm_evaluated = TRUE
     """
-    params = {}
+    params = {"user_id": user_id}
     if not show_skipped_bool:
         query += " AND COALESCE(js.recommendation, 'consider') != 'skip'"
     if status != "all":
@@ -233,19 +469,21 @@ def dashboard(
     with engine.connect() as conn:
         rows = conn.execute(text(query), params).mappings().all()
         pending_llm_count = conn.execute(
-            text("SELECT COUNT(*) FROM job_score WHERE profile_id = 1 AND llm_evaluated = FALSE")
+            text("SELECT COUNT(*) FROM job_score WHERE user_id = :uid AND llm_evaluated = FALSE"),
+            {"uid": user_id},
         ).scalar()
 
     try:
-        variants = get_all_variants(engine, profile_id=1)
+        variants = get_all_variants(engine, user_id=user_id)
     except Exception as e:
-        print(f"[dashboard] No se pudieron leer las variantes de busqueda: {e}")
+        print(f"[dashboard] No se pudieron leer las variantes para user {user_id}: {e}")
         variants = []
 
     return templates.TemplateResponse(
         "dashboard.html",
         {
             "request": request,
+            "current_user": current_user,
             "jobs": rows,
             "status": status,
             "show_skipped": show_skipped_bool,
@@ -258,8 +496,9 @@ def dashboard(
 
 
 @app.get("/dashboard/{job_score_id}")
-def dashboard_detail(request: Request, job_score_id: int):
+def dashboard_detail(request: Request, job_score_id: int, current_user: dict = Depends(get_current_user)):
     engine = get_engine()
+    user_id = current_user["id"]
     with engine.connect() as conn:
         row = conn.execute(
             text("""
@@ -269,47 +508,45 @@ def dashboard_detail(request: Request, job_score_id: int):
                 FROM job_score js
                 JOIN job_offer jo ON jo.id = js.job_offer_id
                 LEFT JOIN search_query_variant sqv ON sqv.id = jo.variant_id
-                WHERE js.id = :id
+                WHERE js.id = :id AND js.user_id = :uid
             """),
-            {"id": job_score_id},
+            {"id": job_score_id, "uid": user_id},
         ).mappings().first()
-    return templates.TemplateResponse("dashboard.html", {"request": request, "detail": row, "jobs": []})
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Oferta no encontrada o no pertenece a tu usuario.")
+
+    return templates.TemplateResponse(
+        "dashboard.html",
+        {"request": request, "current_user": current_user, "detail": row, "jobs": []},
+    )
 
 
 @app.post("/dashboard/clear-jobs")
-def clear_jobs():
-    """
-    Elimina TODAS las ofertas guardadas (job_offer, y en cascada job_score),
-    sin tocar el perfil ni las variantes de busqueda. Resetea el cutoff de cada
-    variante (last_posted_cutoff_utc y last_run_at a NULL) para que la proxima
-    ejecucion del cron repueble desde cero en vez de filtrar por una fecha ya
-    obsoleta que ya no corresponde a ningun dato guardado.
-    """
+def clear_jobs(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
     engine = get_engine()
     with engine.begin() as conn:
-        conn.execute(text("DELETE FROM job_offer"))
+        conn.execute(text("DELETE FROM job_offer WHERE user_id = :uid"), {"uid": user_id})
         conn.execute(
-            text("UPDATE search_query_variant SET last_posted_cutoff_utc = NULL, last_run_at = NULL WHERE profile_id = 1")
+            text("UPDATE search_query_variant SET last_posted_cutoff_utc = NULL, last_run_at = NULL WHERE user_id = :uid"),
+            {"uid": user_id},
         )
     return RedirectResponse(url="/dashboard", status_code=303)
 
 
 @app.post("/api/job/{job_score_id}/status")
-def update_job_status(job_score_id: int, payload: JobStatusUpdate):
-    """
-    Actualiza el estado de una oferta. Las ofertas descartadas NO se borran,
-    solo cambian de status a 'discarded' (se ocultan de la tabla por defecto,
-    ver /dashboard?show_discarded=1). El motivo es opcional y se persiste en
-    discard_reason; si el estado deja de ser 'discarded', se limpia el motivo
-    porque ya no aplica.
-    """
+def update_job_status(job_score_id: int, payload: JobStatusUpdate, current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
     discard_reason = payload.reason.strip() if (payload.status == "discarded" and payload.reason) else None
     engine = get_engine()
     with engine.begin() as conn:
-        conn.execute(
-            text("UPDATE job_score SET status = :status, discard_reason = :discard_reason WHERE id = :id"),
-            {"status": payload.status, "discard_reason": discard_reason, "id": job_score_id},
+        result = conn.execute(
+            text("UPDATE job_score SET status = :status, discard_reason = :discard_reason WHERE id = :id AND user_id = :uid"),
+            {"status": payload.status, "discard_reason": discard_reason, "id": job_score_id, "uid": user_id},
         )
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Oferta no encontrada.")
     return {"ok": True}
 
 

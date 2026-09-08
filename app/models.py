@@ -1,5 +1,5 @@
 """
-Modelos ORM ligeros usados solo en el portal para lecturas.
+Modelos ORM ligeros usados solo en el portal para lecturas y autenticación.
 """
 from sqlalchemy import Column, Integer, String, Text, Float, Boolean, ARRAY, TIMESTAMP
 from sqlalchemy.orm import declarative_base
@@ -7,9 +7,19 @@ from sqlalchemy.orm import declarative_base
 Base = declarative_base()
 
 
+class AppUser(Base):
+    __tablename__ = "app_user"
+    id = Column(Integer, primary_key=True)
+    username = Column(String, unique=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(TIMESTAMP)
+
+
 class Profile(Base):
     __tablename__ = "profile"
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, unique=True, nullable=False)
     raw_cv_text = Column(Text, nullable=False)
     location_preference = Column(String)
     remote_preference = Column(String)
@@ -20,7 +30,8 @@ class Profile(Base):
 class JobOffer(Base):
     __tablename__ = "job_offer"
     id = Column(Integer, primary_key=True)
-    external_id = Column(String, unique=True, nullable=False)
+    user_id = Column(Integer, nullable=False)
+    external_id = Column(String, nullable=False)
     title = Column(String, nullable=False)
     company = Column(String)
     location = Column(String)
@@ -30,6 +41,7 @@ class JobOffer(Base):
     source = Column(String, nullable=False)
     salary_min = Column(Integer)
     salary_max = Column(Integer)
+    salary_raw = Column(String)
     posted_at = Column(TIMESTAMP)
     fetched_at = Column(TIMESTAMP)
 
@@ -37,6 +49,7 @@ class JobOffer(Base):
 class JobScore(Base):
     __tablename__ = "job_score"
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer)
     job_offer_id = Column(Integer)
     profile_id = Column(Integer)
     vector_similarity = Column(Float, nullable=False)
@@ -47,3 +60,6 @@ class JobScore(Base):
     missing_requirements = Column(ARRAY(String))
     final_score = Column(Float, nullable=False)
     status = Column(String, default="new")
+    discard_reason = Column(String)
+    recommendation = Column(String)
+

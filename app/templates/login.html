@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="max-width: 420px; margin: 3rem auto;">
+  <div class="card" style="padding: 2rem;">
+    <h2 style="margin-top: 0; margin-bottom: 0.5rem; text-align: center;">Iniciar Sesión</h2>
+    <p class="muted" style="text-align: center; margin-bottom: 1.5rem;">Accede a tu panel personalizado de linkedinTracker</p>
+
+    {% if error %}
+    <div style="background: #fef2f2; color: var(--danger); border: 1px solid #fecaca; padding: 0.75rem 1rem; border-radius: var(--radius); margin-bottom: 1.25rem; font-size: 0.9rem;">
+      {{ error }}
+    </div>
+    {% endif %}
+
+    {% if message %}
+    <div style="background: #f0fdf4; color: var(--success); border: 1px solid #bbf7d0; padding: 0.75rem 1rem; border-radius: var(--radius); margin-bottom: 1.25rem; font-size: 0.9rem;">
+      {{ message }}
+    </div>
+    {% endif %}
+
+    <form method="post" action="/login">
+      <input type="hidden" name="next" value="{{ next or '' }}">
+
+      <div style="margin-bottom: 1rem;">
+        <label for="username" style="display: block; font-weight: 500; margin-bottom: 0.35rem; font-size: 0.9rem;">Usuario</label>
+        <input type="text" id="username" name="username" required autofocus placeholder="Tu nombre de usuario" style="width: 100%; padding: 0.6rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.95rem;">
+      </div>
+
+      <div style="margin-bottom: 1.5rem;">
+        <label for="password" style="display: block; font-weight: 500; margin-bottom: 0.35rem; font-size: 0.9rem;">Contraseña</label>
+        <input type="password" id="password" name="password" required placeholder="Tu contraseña" style="width: 100%; padding: 0.6rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.95rem;">
+      </div>
+
+      <button type="submit" style="width: 100%; padding: 0.7rem; font-size: 0.95rem; font-weight: 600; cursor: pointer;">
+        Entrar
+      </button>
+    </form>
+
+    <div style="margin-top: 1.5rem; text-align: center; font-size: 0.88rem; border-top: 1px solid var(--border); padding-top: 1rem;">
+      <span class="muted">¿No tienes cuenta?</span>
+      <a href="/register" style="color: var(--primary); font-weight: 500; text-decoration: none; margin-left: 0.3rem;">Crear cuenta</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

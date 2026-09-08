@@ -80,9 +80,20 @@ def check_budget(engine) -> tuple[bool, int]:
     return can_run, jsearch_used
 
 
-def load_profile(engine) -> dict | None:
+def load_active_users(engine) -> list[dict]:
     with engine.connect() as conn:
-        row = conn.execute(text("SELECT * FROM profile WHERE id = 1")).mappings().first()
+        rows = conn.execute(
+            text("SELECT id, username FROM app_user WHERE is_active = TRUE ORDER BY id ASC")
+        ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def load_profile_by_user(engine, user_id: int) -> dict | None:
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT * FROM profile WHERE user_id = :uid"),
+            {"uid": user_id},
+        ).mappings().first()
     if row is None:
         return None
     profile = dict(row)
@@ -104,9 +115,9 @@ def main():
     errors = []
 
     try:
-        profile = load_profile(engine)
-        if profile is None:
-            errors.append("No hay perfil configurado (profile.id=1). Completa el onboarding primero.")
+        active_users = load_active_users(engine)
+        if not active_users:
+            print("No hay usuarios activos registrados en app_user.")
             return
 
         can_run, jsearch_used_month = check_budget(engine)
@@ -114,23 +125,34 @@ def main():
             errors.append(f"Presupuesto JSearch agotado ({jsearch_used_month}/{JSEARCH_MONTHLY_BUDGET} este mes).")
             return
 
-        try:
-            variants = get_or_seed_variants(engine, 1, profile)
-        except RuntimeError as e:
-            errors.append(str(e))
-            return
-
-        remote_only = profile.get("remote_preference") == "remote"
-        location = profile.get("location_preference")
         budget_exhausted = False
 
-        for variant in variants:
+        for user in active_users:
             if budget_exhausted:
-                errors.append(
-                    f"Presupuesto JSearch agotado tras {jsearch_calls} llamadas en esta ejecucion; "
-                    f"variante '{variant['query_text']}' (y las siguientes) se omiten hasta la proxima ejecucion."
-                )
                 break
+
+            user_id = user["id"]
+            username = user["username"]
+            profile = load_profile_by_user(engine, user_id=user_id)
+            if profile is None:
+                continue
+
+            try:
+                variants = get_or_seed_variants(engine, profile["id"], profile)
+            except RuntimeError as e:
+                errors.append(f"User {username}: {e}")
+                continue
+
+            remote_only = profile.get("remote_preference") == "remote"
+            location = profile.get("location_preference")
+
+            for variant in variants:
+                if budget_exhausted:
+                    errors.append(
+                        f"Presupuesto JSearch agotado tras {jsearch_calls} llamadas; omitiendo variantes restantes."
+                    )
+                    break
+
 
             cutoff = variant.get("last_posted_cutoff_utc")
             variant_newest_posted_at = None

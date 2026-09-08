@@ -59,12 +59,23 @@ LINKEDIN_HOURS_AGO = max(1, _int_env("LINKEDIN_HOURS_AGO", 4))
 LINKEDIN_MAX_JOBS_PER_VARIANT = max(1, _int_env("LINKEDIN_MAX_JOBS_PER_VARIANT", 25))
 
 
-def load_profile_with_retry(engine, max_retries: int = 3) -> dict | None:
-    """Carga el perfil con reintentos defensivos ante desconexiones de Postgres."""
+def load_active_users(engine) -> list[dict]:
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT id, username FROM app_user WHERE is_active = TRUE ORDER BY id ASC")
+        ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def load_profile_by_user(engine, user_id: int, max_retries: int = 3) -> dict | None:
+    """Carga el perfil de un usuario con reintentos defensivos ante desconexiones de Postgres."""
     for attempt in range(max_retries):
         try:
             with engine.connect() as conn:
-                row = conn.execute(text("SELECT * FROM profile WHERE id = 1")).mappings().first()
+                row = conn.execute(
+                    text("SELECT * FROM profile WHERE user_id = :uid"),
+                    {"uid": user_id},
+                ).mappings().first()
             if row is None:
                 return None
             profile = dict(row)
@@ -72,10 +83,10 @@ def load_profile_with_retry(engine, max_retries: int = 3) -> dict | None:
             return profile
         except (OperationalError, DBAPIError) as e:
             wait_s = (attempt + 1) * 2.0
-            logger.warning(f"Fallo de conexión a BD cargando perfil ({e}). Reintentando en {wait_s}s...")
+            logger.warning(f"Fallo de conexión a BD cargando perfil user_id={user_id} ({e}). Reintentando en {wait_s}s...")
             time.sleep(wait_s)
         except Exception as e:
-            logger.error(f"Error inesperado cargando perfil: {e}")
+            logger.error(f"Error inesperado cargando perfil user_id={user_id}: {e}")
             return None
     return None
 
@@ -166,81 +177,88 @@ def main():
 
     try:
         engine = get_engine()
-        profile = load_profile_with_retry(engine)
-        if profile is None:
-            msg = "No hay perfil configurado (profile.id=1) o la BD no responde. Completa el onboarding primero."
-            errors.append(msg)
-            logger.error(msg)
-            return
-
-        location = profile.get("location_preference")
-        remote_pref = profile.get("remote_preference")
-        logger.info(f"Perfil cargado: location_preference={location!r}, remote_preference={remote_pref!r}")
-        logger.info(f"Parámetros: ventana={LINKEDIN_HOURS_AGO}h, max_jobs_por_variante={LINKEDIN_MAX_JOBS_PER_VARIANT}")
-
-        try:
-            variants = [v for v in get_all_variants(engine, profile_id=1) if v.get("is_active", True)]
-        except Exception as ve:
-            msg = f"Error obteniendo variantes de búsqueda: {ve}"
-            errors.append(msg)
-            logger.error(msg)
-            return
-
-        if not variants:
-            msg = "No hay variantes de búsqueda activas."
-            errors.append(msg)
+        active_users = load_active_users(engine)
+        if not active_users:
+            msg = "No hay usuarios activos registrados en app_user. Regístrate en el portal primero."
             logger.warning(msg)
             return
 
-        logger.info(f"{len(variants)} variante(s) activa(s) a procesar:")
-        for idx, v in enumerate(variants, 1):
-            logger.info(f"  [{idx}/{len(variants)}] (id={v['id']}) '{v['query_text']}'")
-
+        logger.info(f"Usuarios activos a procesar: {len(active_users)} {[u['username'] for u in active_users]}")
         circuit_broken = False
 
         with LinkedInGuestClient() as client:
-            for idx, variant in enumerate(variants, 1):
+            for user in active_users:
                 if circuit_broken:
                     break
 
-                query_text = variant["query_text"]
-                variant_id = variant["id"]
-                logger.info(f"\n{'='*25} [{idx}/{len(variants)}] Variante '{query_text}' (id={variant_id}) {'='*25}")
+                user_id = user["id"]
+                username = user["username"]
+                logger.info(f"\n{'#'*60}\nPROCESANDO USUARIO: '{username}' (id={user_id})\n{'#'*60}")
 
-                v_stat = {
-                    "id": variant_id,
-                    "query": query_text,
-                    "found": 0,
-                    "inserted": 0,
-                    "duplicates": 0,
-                    "status": "OK",
-                }
+                profile = load_profile_by_user(engine, user_id=user_id)
+                if profile is None:
+                    logger.warning(f"Usuario '{username}' no tiene perfil/CV configurado. Saltando.")
+                    continue
+
+                location = profile.get("location_preference")
+                remote_pref = profile.get("remote_preference")
+                logger.info(f"Perfil cargado ({username}): location={location!r}, remote={remote_pref!r}")
 
                 try:
-                    raw_jobs = client.scrape_variant(
-                        query_text=query_text,
-                        location=location,
-                        remote_preference=remote_pref,
-                        hours_ago=LINKEDIN_HOURS_AGO,
-                        max_jobs=LINKEDIN_MAX_JOBS_PER_VARIANT,
-                    )
-                    v_stat["found"] = len(raw_jobs)
-                    logger.info(f"Variante '{query_text}': {len(raw_jobs)} ofertas encontradas en LinkedIn.")
-                except (LinkedInRateLimitError, LinkedInBlockedError) as block_err:
-                    msg = f"DETENCIÓN DE SEGURIDAD: {block_err}. Abortando siguientes variantes para proteger la IP."
+                    variants = [v for v in get_all_variants(engine, user_id=user_id) if v.get("is_active", True)]
+                except Exception as ve:
+                    msg = f"Error obteniendo variantes para {username}: {ve}"
                     errors.append(msg)
                     logger.error(msg)
-                    v_stat["status"] = "BLOQUEO"
-                    variant_stats.append(v_stat)
-                    circuit_broken = True
-                    break
-                except Exception as e:
-                    err_msg = f"Error scrapeando variante '{query_text}': {e}"
-                    errors.append(err_msg)
-                    logger.error(err_msg)
-                    v_stat["status"] = "ERROR"
-                    variant_stats.append(v_stat)
                     continue
+
+                if not variants:
+                    logger.warning(f"Usuario '{username}' no tiene variantes activas. Saltando.")
+                    continue
+
+                logger.info(f"Procesando {len(variants)} variante(s) para {username}:")
+                for idx, variant in enumerate(variants, 1):
+                    if circuit_broken:
+                        break
+
+                    query_text = variant["query_text"]
+                    variant_id = variant["id"]
+                    logger.info(f"\n{'='*20} [{idx}/{len(variants)}] ({username}) '{query_text}' (id={variant_id}) {'='*20}")
+
+                    v_stat = {
+                        "id": variant_id,
+                        "query": f"{username}: {query_text}",
+                        "found": 0,
+                        "inserted": 0,
+                        "duplicates": 0,
+                        "status": "OK",
+                    }
+
+                    try:
+                        raw_jobs = client.scrape_variant(
+                            query_text=query_text,
+                            location=location,
+                            remote_preference=remote_pref,
+                            hours_ago=LINKEDIN_HOURS_AGO,
+                            max_jobs=LINKEDIN_MAX_JOBS_PER_VARIANT,
+                        )
+                        v_stat["found"] = len(raw_jobs)
+                        logger.info(f"Variante '{query_text}': {len(raw_jobs)} ofertas encontradas en LinkedIn.")
+                    except (LinkedInRateLimitError, LinkedInBlockedError) as block_err:
+                        msg = f"DETENCIÓN DE SEGURIDAD: {block_err}. Abortando siguientes variantes."
+                        errors.append(msg)
+                        logger.error(msg)
+                        v_stat["status"] = "BLOQUEO"
+                        variant_stats.append(v_stat)
+                        circuit_broken = True
+                        break
+                    except Exception as e:
+                        err_msg = f"Error scrapeando variante '{query_text}' de {username}: {e}"
+                        errors.append(err_msg)
+                        logger.error(err_msg)
+                        v_stat["status"] = "ERROR"
+                        variant_stats.append(v_stat)
+                        continue
 
                 inserted_this_variant = 0
                 duplicates_this_variant = 0

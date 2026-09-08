@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="max-width: 440px; margin: 3rem auto;">
+  <div class="card" style="padding: 2rem;">
+    <h2 style="margin-top: 0; margin-bottom: 0.5rem; text-align: center;">Crear Cuenta</h2>
+    <p class="muted" style="text-align: center; margin-bottom: 1.5rem;">Registro de nuevo usuario en linkedinTracker</p>
+
+    {% if not can_register %}
+    <div style="background: #fffbeb; color: var(--warning); border: 1px solid #fde68a; padding: 1rem; border-radius: var(--radius); margin-bottom: 1.5rem; font-size: 0.9rem; text-align: center;">
+      <strong>⚠️ Registro cerrado:</strong> Se ha alcanzado el límite máximo de usuarios permitidos en esta instancia ({{ current_count }}/{{ max_users }}).
+      <div style="margin-top: 0.75rem;">
+        <a href="/login" style="color: var(--primary); font-weight: 600; text-decoration: none;">Ir a Iniciar Sesión</a>
+      </div>
+    </div>
+    {% else %}
+
+      {% if error %}
+      <div style="background: #fef2f2; color: var(--danger); border: 1px solid #fecaca; padding: 0.75rem 1rem; border-radius: var(--radius); margin-bottom: 1.25rem; font-size: 0.9rem;">
+        {{ error }}
+      </div>
+      {% endif %}
+
+      <div style="margin-bottom: 1.25rem; font-size: 0.82rem; background: #f8fafc; border: 1px solid var(--border); padding: 0.5rem 0.75rem; border-radius: var(--radius); color: var(--text-muted);">
+        ℹ️ Usuarios registrados: <strong>{{ current_count }} de {{ max_users }} máximo</strong> permitidos.
+      </div>
+
+      <form method="post" action="/register">
+        <div style="margin-bottom: 1rem;">
+          <label for="username" style="display: block; font-weight: 500; margin-bottom: 0.35rem; font-size: 0.9rem;">Nombre de usuario</label>
+          <input type="text" id="username" name="username" required autofocus placeholder="Ej. christian" style="width: 100%; padding: 0.6rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.95rem;">
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+          <label for="password" style="display: block; font-weight: 500; margin-bottom: 0.35rem; font-size: 0.9rem;">Contraseña</label>
+          <input type="password" id="password" name="password" required minlength="4" placeholder="Mínimo 4 caracteres" style="width: 100%; padding: 0.6rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.95rem;">
+        </div>
+
+        <div style="margin-bottom: 1.5rem;">
+          <label for="password_confirm" style="display: block; font-weight: 500; margin-bottom: 0.35rem; font-size: 0.9rem;">Repetir Contraseña</label>
+          <input type="password" id="password_confirm" name="password_confirm" required minlength="4" placeholder="Repite tu contraseña" style="width: 100%; padding: 0.6rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.95rem;">
+        </div>
+
+        <button type="submit" style="width: 100%; padding: 0.7rem; font-size: 0.95rem; font-weight: 600; cursor: pointer;">
+          Registrarse y Comenzar
+        </button>
+      </form>
+
+      <div style="margin-top: 1.5rem; text-align: center; font-size: 0.88rem; border-top: 1px solid var(--border); padding-top: 1rem;">
+        <span class="muted">¿Ya tienes cuenta?</span>
+        <a href="/login" style="color: var(--primary); font-weight: 500; text-decoration: none; margin-left: 0.3rem;">Iniciar sesión</a>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

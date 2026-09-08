@@ -26,28 +26,32 @@ DEFAULT_FALLBACK_ROLE = "software engineer"
 VARIANTS_PROMPT_PATH = Path(__file__).parent / "prompts" / "generate_variants.txt"
 
 
-def get_active_variants(engine, profile_id: int = 1) -> list[dict]:
+def get_active_variants(engine, profile_id: int | None = None, user_id: int | None = None) -> list[dict]:
+    clause = "user_id = :uid" if user_id is not None else "profile_id = :pid"
+    param = {"uid": user_id} if user_id is not None else {"pid": profile_id or 1}
     with engine.connect() as conn:
         rows = conn.execute(
-            text("""
+            text(f"""
                 SELECT * FROM search_query_variant
-                WHERE profile_id = :pid AND is_active = TRUE
+                WHERE {clause} AND is_active = TRUE
                 ORDER BY order_index ASC
             """),
-            {"pid": profile_id},
+            param,
         ).mappings().all()
     return [dict(r) for r in rows]
 
 
-def get_all_variants(engine, profile_id: int = 1) -> list[dict]:
+def get_all_variants(engine, profile_id: int | None = None, user_id: int | None = None) -> list[dict]:
+    clause = "user_id = :uid" if user_id is not None else "profile_id = :pid"
+    param = {"uid": user_id} if user_id is not None else {"pid": profile_id or 1}
     with engine.connect() as conn:
         rows = conn.execute(
-            text("""
+            text(f"""
                 SELECT * FROM search_query_variant
-                WHERE profile_id = :pid
+                WHERE {clause}
                 ORDER BY order_index ASC
             """),
-            {"pid": profile_id},
+            param,
         ).mappings().all()
     return [dict(r) for r in rows]
 
@@ -76,15 +80,16 @@ def seed_default_variants(engine, profile_id: int, profile: dict) -> None:
         candidates = [DEFAULT_FALLBACK_ROLE]
 
     candidates = candidates[:MAX_SEED_VARIANTS]
+    user_id = profile.get("user_id")
 
     with engine.begin() as conn:
         for idx, query_text_value in enumerate(candidates):
             conn.execute(
                 text("""
-                    INSERT INTO search_query_variant (profile_id, query_text, source, order_index)
-                    VALUES (:profile_id, :query_text, 'ai', :order_index)
+                    INSERT INTO search_query_variant (profile_id, user_id, query_text, source, order_index)
+                    VALUES (:profile_id, :user_id, :query_text, 'ai', :order_index)
                 """),
-                {"profile_id": profile_id, "query_text": query_text_value, "order_index": idx},
+                {"profile_id": profile_id, "user_id": user_id, "query_text": query_text_value, "order_index": idx},
             )
 
 
@@ -155,7 +160,7 @@ def generate_variants_via_llm(profile: dict) -> list[str]:
     return cleaned[:MAX_AI_VARIANTS]
 
 
-def add_ai_variants(engine, profile_id: int, variants: list[str]) -> int:
+def add_ai_variants(engine, profile_id: int, variants: list[str], user_id: int | None = None) -> int:
     """
     Anade las variantes generadas por IA como filas nuevas (append). Nunca
     sobrescribe ni desactiva lo que el usuario ya tenga configurado a mano;
@@ -164,30 +169,35 @@ def add_ai_variants(engine, profile_id: int, variants: list[str]) -> int:
     """
     if not variants:
         return 0
+    clause = "user_id = :uid" if user_id is not None else "profile_id = :pid"
+    param = {"uid": user_id} if user_id is not None else {"pid": profile_id}
     with engine.connect() as conn:
         max_order = conn.execute(
-            text("SELECT COALESCE(MAX(order_index), -1) FROM search_query_variant WHERE profile_id = :pid"),
-            {"pid": profile_id},
+            text(f"SELECT COALESCE(MAX(order_index), -1) FROM search_query_variant WHERE {clause}"),
+            param,
         ).scalar()
 
     inserted = 0
     with engine.begin() as conn:
         for offset, query_text_value in enumerate(variants):
+            chk_params = {"qt": query_text_value}
+            chk_params.update(param)
             existing = conn.execute(
-                text("""
+                text(f"""
                     SELECT id FROM search_query_variant
-                    WHERE profile_id = :pid AND lower(query_text) = lower(:qt)
+                    WHERE {clause} AND lower(query_text) = lower(:qt)
                 """),
-                {"pid": profile_id, "qt": query_text_value},
+                chk_params,
             ).first()
             if existing:
                 continue
             conn.execute(
                 text("""
-                    INSERT INTO search_query_variant (profile_id, query_text, source, order_index)
-                    VALUES (:pid, :qt, 'ai', :order_index)
+                    INSERT INTO search_query_variant (profile_id, user_id, query_text, source, order_index)
+                    VALUES (:pid, :uid, :qt, 'ai', :order_index)
                 """),
-                {"pid": profile_id, "qt": query_text_value, "order_index": max_order + 1 + offset},
+                {"pid": profile_id, "uid": user_id, "qt": query_text_value, "order_index": max_order + 1 + offset},
             )
             inserted += 1
     return inserted
+

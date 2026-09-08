@@ -62,7 +62,19 @@ def onboarding_submit(
     role_family: str = Form(""),
     min_salary: str = Form(""),
 ):
-    extracted = extract_cv(raw_cv_text)
+    try:
+        extracted = extract_cv(raw_cv_text)
+    except Exception as e:
+        print(f"[onboarding] Error en extraccion de CV con LLM: {e}")
+        roles_list = [r.strip() for r in role_family.split(",") if r.strip()]
+        extracted = {
+            "skills": roles_list,
+            "years_experience_by_skill": {},
+            "seniority": "mid",
+            "equivalent_roles": roles_list,
+            "languages": [],
+            "certifications": [],
+        }
     embedding = embed_text(raw_cv_text)
     roles = [r.strip() for r in role_family.split(",") if r.strip()]
     salary = int(min_salary) if min_salary.strip().isdigit() else None
@@ -304,4 +316,4 @@ if __name__ == "__main__":
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", 7999))
     print(f"\n🌐 Dashboard disponible en: http://localhost:{port}/dashboard\n")
-    uvicorn.run("app.main:app", host=host, port=port)
+    uvicorn.run("app.main:app", host=host, port=port, reload=True)

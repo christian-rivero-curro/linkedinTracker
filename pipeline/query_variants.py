@@ -17,6 +17,7 @@ from pathlib import Path
 
 from sqlalchemy import text
 
+from pipeline.cv_extractor import _resolve_model_env, DEFAULT_EXTRACTION_MODEL
 from pipeline.llm_client import call_llm_json
 
 MAX_SEED_VARIANTS = 5
@@ -140,7 +141,7 @@ def generate_variants_via_llm(profile: dict) -> list[str]:
     (ej. llega como string o numero), o contiene elementos que no son str,
     se descartan en vez de propagar un TypeError o iterar caracteres sueltos.
     """
-    model = os.environ.get("OPENROUTER_MODEL_EXTRACTION", "minimax/minimax-m2.7:free")
+    model = _resolve_model_env("OPENROUTER_MODEL_EXTRACTION", DEFAULT_EXTRACTION_MODEL)
     prompt_template = VARIANTS_PROMPT_PATH.read_text(encoding="utf-8")
     prompt = prompt_template.format(
         profile_json=json.dumps(profile.get("extracted_json") or {}, ensure_ascii=False),

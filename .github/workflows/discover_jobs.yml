@@ -12,7 +12,9 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt
-      - run: python pipeline/run_discovery.py
+      - name: Run Discovery (JSearch)
+        run: python pipeline/run_discovery.py
+        continue-on-error: true
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
@@ -21,3 +23,10 @@ jobs:
           OPENROUTER_MODEL_EXTRACTION: ${{ vars.OPENROUTER_MODEL_EXTRACTION }}
           OPENROUTER_MODEL_SCORING: ${{ vars.OPENROUTER_MODEL_SCORING }}
           JSEARCH_MONTHLY_BUDGET: '180'
+      - name: Run LinkedIn Guest Scraper
+        if: always()
+        run: python pipeline/run_linkedin_guest.py
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          LINKEDIN_HOURS_AGO: '4'
+          LINKEDIN_MAX_JOBS_PER_VARIANT: '25'

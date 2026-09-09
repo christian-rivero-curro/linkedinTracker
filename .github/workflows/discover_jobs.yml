@@ -47,6 +47,7 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL_SCORING: ${{ vars.OPENROUTER_MODEL_SCORING }}
+          LLM_EVALUATION_PROMPT: ${{ vars.LLM_EVALUATION_PROMPT || '' }}
           LLM_CALL_DELAY_SECONDS: '2'
           LLM_MAX_CALLS_PER_RUN: '50'
           TARGET_USER_ID: ${{ github.event.inputs.target_user_id || '' }}

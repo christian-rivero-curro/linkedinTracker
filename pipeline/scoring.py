@@ -161,26 +161,46 @@ def _estimate_candidate_experience(profile_json: dict) -> float:
     return 3.0
 
 
+def get_evaluation_prompt_template() -> str:
+    """
+    Obtiene el template del prompt para evaluar ofertas.
+    Si la variable de entorno LLM_EVALUATION_PROMPT esta definida y no esta vacia,
+    se utiliza dicha plantilla (permitiendo modificarla desde GitHub Actions sin commits).
+    En caso contrario, se carga la plantilla predeterminada de PROMPT_PATH.
+    """
+    env_prompt = os.environ.get("LLM_EVALUATION_PROMPT", "").strip()
+    if env_prompt:
+        return env_prompt.replace("\\n", "\n")
+    return PROMPT_PATH.read_text(encoding="utf-8")
+
+
 def evaluate_job_with_llm(profile_json: dict, job: dict, profile_meta: dict | None = None) -> dict:
     model = _resolve_model_env("OPENROUTER_MODEL_SCORING", DEFAULT_SCORING_MODEL)
-    prompt_template = PROMPT_PATH.read_text(encoding="utf-8")
+    prompt_template = get_evaluation_prompt_template()
 
     candidate_years = _estimate_candidate_experience(profile_json)
     candidate_seniority = profile_json.get("seniority") or "mid"
     excluded = (profile_meta and profile_meta.get("excluded_keywords")) or []
     excluded_summary = ", ".join(excluded) if excluded else "ninguna especificada"
 
-    prompt = prompt_template.format(
-        profile_json=profile_json,
-        candidate_years=candidate_years,
-        candidate_seniority=candidate_seniority,
-        excluded_keywords_summary=excluded_summary,
-        job_title=job.get("title", ""),
-        job_company=job.get("company", ""),
-        job_location=job.get("location", ""),
-        job_remote_type=job.get("remote_type", ""),
-        job_description=(job.get("description") or "")[:4000],
-    )
+    format_kwargs = {
+        "profile_json": profile_json,
+        "candidate_years": candidate_years,
+        "candidate_seniority": candidate_seniority,
+        "excluded_keywords_summary": excluded_summary,
+        "job_title": job.get("title", ""),
+        "job_company": job.get("company", ""),
+        "job_location": job.get("location", ""),
+        "job_remote_type": job.get("remote_type", ""),
+        "job_description": (job.get("description") or "")[:4000],
+    }
+
+    try:
+        prompt = prompt_template.format(**format_kwargs)
+    except Exception as err:
+        # Fallback defensivo si el prompt de entorno tiene errores de formato o sintaxis
+        print(f"[WARN] Error al formatear LLM_EVALUATION_PROMPT ({err}). Usando prompt por defecto.")
+        prompt = PROMPT_PATH.read_text(encoding="utf-8").format(**format_kwargs)
 
     validated: JobEvaluationSchema = call_llm_structured(model, prompt, JobEvaluationSchema)
 

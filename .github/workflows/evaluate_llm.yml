@@ -10,6 +10,10 @@ on:
         description: 'Pausa en segundos entre llamadas al LLM (evitar rate-limit)'
         required: false
         default: '2'
+      prompt_override:
+        description: 'Prompt de evaluación personalizado (opcional; si se deja vacío usa vars.LLM_EVALUATION_PROMPT o el archivo local)'
+        required: false
+        default: ''
 
 concurrency:
   group: evaluate-llm
@@ -41,6 +45,8 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL_SCORING: ${{ vars.OPENROUTER_MODEL_SCORING }}
+          LLM_EVALUATION_PROMPT: ${{ github.event.inputs.prompt_override || vars.LLM_EVALUATION_PROMPT || '' }}
           LLM_CALL_DELAY_SECONDS: ${{ github.event.inputs.call_delay || '2' }}
           LLM_MAX_CALLS_PER_RUN: ${{ github.event.inputs.max_calls || '50' }}
+
 

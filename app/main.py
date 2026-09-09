@@ -25,7 +25,7 @@ from app.auth import (
     get_max_users,
 )
 from pipeline.cv_extractor import extract_cv
-from pipeline.embeddings import embed_text, to_pgvector_literal
+from pipeline.embeddings import to_pgvector_literal
 from pipeline.query_variants import get_all_variants, generate_variants_via_llm, add_ai_variants, seed_default_variants
 
 load_dotenv()
@@ -34,6 +34,16 @@ app = FastAPI(title="linkedinTracker")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
+
+
+@app.on_event("startup")
+def startup_db_migrations():
+    try:
+        engine = get_engine()
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE profile ALTER COLUMN embedding DROP NOT NULL;"))
+    except Exception as e:
+        print(f"[startup] Info restriccion embedding: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -299,16 +309,10 @@ def onboarding_submit(
             "languages": [],
             "certifications": [],
         }
-    embedding = None
-    # En entornos como Render (512MB RAM), no cargamos PyTorch/sentence-transformers en el proceso web
-    # para evitar OOM (Out of Memory) y caídas 502 Bad Gateway.
-    # El runner de GitHub Actions (7GB RAM) calculará y persistirá el vector del perfil
-    # durante la siguiente ejecución del pipeline.
-    if not os.environ.get("RENDER"):
-        try:
-            embedding = embed_text(raw_cv_text)
-        except Exception as e:
-            print(f"[onboarding] Aviso: No se pudo generar embedding local ({e}). Se delegará a GitHub Actions.")
+    # Placeholder inicial rápido y ligero: vector de ceros que satisface restricciones
+    # NOT NULL sin importar librerías pesadas en el servidor web.
+    # El pipeline en GitHub Actions (7GB RAM) calculará el embedding semántico real.
+    placeholder_emb = [0.0] * 384
 
     roles = [r.strip() for r in role_family.split(",") if r.strip()]
     salary = int(min_salary) if min_salary.strip().isdigit() else None
@@ -324,7 +328,7 @@ def onboarding_submit(
                 ON CONFLICT (user_id) DO UPDATE SET
                     raw_cv_text = EXCLUDED.raw_cv_text,
                     extracted_json = EXCLUDED.extracted_json,
-                    embedding = COALESCE(EXCLUDED.embedding, profile.embedding),
+                    embedding = COALESCE(profile.embedding, EXCLUDED.embedding),
                     location_preference = EXCLUDED.location_preference,
                     remote_preference = EXCLUDED.remote_preference,
                     role_family = EXCLUDED.role_family,
@@ -336,7 +340,7 @@ def onboarding_submit(
                 "user_id": user_id,
                 "raw_cv_text": raw_cv_text,
                 "extracted_json": json.dumps(extracted),
-                "embedding": to_pgvector_literal(embedding),
+                "embedding": to_pgvector_literal(placeholder_emb),
                 "location_preference": location_preference or None,
                 "remote_preference": remote_preference,
                 "role_family": roles,

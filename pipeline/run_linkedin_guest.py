@@ -85,8 +85,10 @@ def load_profile_by_user(engine, user_id: int, max_retries: int = 3) -> dict | N
             if row is None:
                 return None
             profile = dict(row)
-            profile["embedding"] = parse_pgvector(profile["embedding"])
-            if not profile["embedding"] and profile.get("raw_cv_text"):
+            profile["embedding"] = parse_pgvector(profile.get("embedding"))
+            emb_list = profile["embedding"]
+            needs_embedding = (not emb_list) or all(v == 0.0 for v in emb_list)
+            if needs_embedding and profile.get("raw_cv_text"):
                 try:
                     logger.info(f"Generando vector de perfil para user_id={user_id}...")
                     emb = embed_text(profile["raw_cv_text"])

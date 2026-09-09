@@ -425,11 +425,54 @@
       </div>
     </div>
 
-    <!-- SECCIÓN 3: VARIANTES DE BÚSQUEDA -->
+    <!-- SECCIÓN 3: FUENTES DE VACANTES -->
+    <div class="section-card">
+      <div class="section-header">
+        <span style="font-size: 1.25rem;">🌐</span>
+        <h2 class="section-title">Portales y Fuentes de Vacantes</h2>
+      </div>
+      <p class="section-desc">
+        Configura los portales desde los cuales deseas descubrir ofertas de empleo. El sistema rastreará de forma combinada todas las fuentes activas.
+      </p>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; margin-top: 1rem;">
+        {% set user_sources = profile.enabled_sources if (profile and profile.enabled_sources) else ['linkedin'] %}
+        {% for src in all_sources %}
+        <label style="border: 1px solid {{ '#cbd5e1' if src.id in user_sources and src.is_available else '#e2e8f0' }}; border-radius: 10px; padding: 1rem; display: flex; align-items: flex-start; gap: 0.75rem; cursor: {{ 'pointer' if src.is_available else 'default' }}; background: {{ '#ffffff' if src.is_available else '#f8fafc' }}; transition: all 0.15s; box-shadow: {{ '0 1px 3px rgba(37,99,235,0.1)' if src.id in user_sources and src.is_available else 'none' }};">
+          <input
+            type="checkbox"
+            name="enabled_sources_check"
+            value="{{ src.id }}"
+            {{ 'checked' if src.id in user_sources else '' }}
+            {{ 'disabled' if not src.is_available else '' }}
+            style="margin-top: 0.25rem; accent-color: #2563eb; width: 1.15rem; height: 1.15rem; cursor: pointer;"
+            onchange="syncEnabledSources()"
+          >
+          <div style="flex: 1;">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.35rem;">
+              <span style="font-weight: 700; font-size: 0.95rem; color: #1e293b;">
+                {{ src.icon }} {{ src.name }}
+              </span>
+              {% if src.is_available %}
+                <span class="badge" style="background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-size:0.7rem;">✓ {{ src.badge_label }}</span>
+              {% else %}
+                <span class="badge" style="background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0;font-size:0.7rem;">⏳ {{ src.badge_label }}</span>
+              {% endif %}
+            </div>
+            <p style="margin: 0; font-size: 0.8rem; color: #64748b; line-height: 1.4;">
+              {{ src.description }}
+            </p>
+          </div>
+        </label>
+        {% endfor %}
+      </div>
+      <input type="hidden" id="enabled_sources" name="enabled_sources" value="{{ (profile.enabled_sources | join(',')) if (profile and profile.enabled_sources) else 'linkedin' }}">
+    </div>
+
+    <!-- SECCIÓN 4: VARIANTES DE BÚSQUEDA -->
     <div class="section-card">
       <div class="section-header">
         <span style="font-size: 1.25rem;">🔍</span>
-        <h2 class="section-title">Variantes de Búsqueda en LinkedIn</h2>
+        <h2 class="section-title">Variantes de Búsqueda</h2>
       </div>
       <p class="section-desc">
         El sistema rastrea <strong>todas tus variantes activas</strong> en cada ciclo de búsqueda (sin rotar de una en una) para maximizar la cobertura. Puedes añadir nuevos títulos, activarlos o pausarlos. <em>Ningún cambio aquí se guardará hasta que hagas clic en el botón de abajo.</em>
@@ -640,8 +683,22 @@ function suggestWithAI() {
   });
 }
 
+function syncEnabledSources() {
+  const checks = document.querySelectorAll('input[name="enabled_sources_check"]:checked');
+  const vals = Array.from(checks).map(c => c.value);
+  if (vals.length === 0) {
+    vals.push('linkedin');
+  }
+  const hiddenInput = document.getElementById('enabled_sources');
+  if (hiddenInput) {
+    hiddenInput.value = vals.join(',');
+  }
+}
+
 function handleFormSubmit(e) {
-  // Serializar el estado de variantes al campo oculto
+  // Sincronizar fuentes habilitadas y variantes
+  syncEnabledSources();
+
   const hiddenInput = document.getElementById('variants_json');
   hiddenInput.value = JSON.stringify(variantsState);
 
@@ -653,6 +710,9 @@ function handleFormSubmit(e) {
 }
 
 // Renderizado inicial al cargar la página
-document.addEventListener('DOMContentLoaded', renderVariants);
+document.addEventListener('DOMContentLoaded', function() {
+  renderVariants();
+  syncEnabledSources();
+});
 </script>
 {% endblock %}

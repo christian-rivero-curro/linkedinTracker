@@ -37,11 +37,22 @@
   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.75rem;margin-bottom:0.75rem;">
     <h1 style="margin:0;">Ofertas rankeadas</h1>
     <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-      <button id="btn-trigger-discovery" onclick="triggerDiscovery()" style="background:#2563eb;color:white;border:none;border-radius:4px;padding:0.45rem 0.9rem;font-weight:600;font-size:0.875rem;cursor:pointer;display:inline-flex;align-items:center;gap:0.4rem;transition:opacity 0.2s;">
-        <span id="btn-discovery-icon">🔍</span> <span id="btn-discovery-text">Buscar nuevas ofertas en LinkedIn</span>
+      <div style="display:inline-flex;align-items:center;background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;padding:0.15rem 0.5rem;">
+        <label for="discovery-source-select" style="font-size:0.8rem;font-weight:600;color:#64748b;margin-right:0.35rem;">Fuente:</label>
+        <select id="discovery-source-select" onchange="updateDiscoveryButtonText()" style="border:none;background:transparent;font-size:0.85rem;font-weight:600;color:#1e293b;outline:none;cursor:pointer;padding:0.3rem 0.2rem;">
+          <option value="all">Todas las fuentes activas</option>
+          {% for src in available_sources %}
+          <option value="{{ src.id }}" {{ 'selected' if src.id == 'linkedin' else '' }}>
+            {{ src.name }} {% if not src.is_available %}({{ src.badge_label }}){% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <button id="btn-trigger-discovery" onclick="triggerDiscovery()" style="background:#2563eb;color:white;border:none;border-radius:6px;padding:0.45rem 0.9rem;font-weight:600;font-size:0.875rem;cursor:pointer;display:inline-flex;align-items:center;gap:0.4rem;transition:all 0.2s;">
+        <span id="btn-discovery-icon">🔍</span> <span id="btn-discovery-text">Buscar en LinkedIn</span>
       </button>
       <form method="post" action="/dashboard/clear-jobs" style="display:inline;" onsubmit="return confirm('¿Seguro que quieres eliminar TODAS tus ofertas guardadas? Esta acción no se puede deshacer. No afecta a tu perfil ni a tus variantes de búsqueda.');">
-        <button type="submit" style="background:#b91c1c;color:white;border:none;border-radius:4px;padding:0.45rem 0.75rem;font-size:0.875rem;cursor:pointer;">Eliminar mis ofertas</button>
+        <button type="submit" style="background:#b91c1c;color:white;border:none;border-radius:6px;padding:0.45rem 0.75rem;font-size:0.875rem;cursor:pointer;">Eliminar mis ofertas</button>
       </form>
     </div>
   </div>
@@ -53,36 +64,47 @@
     {% endif %}
   </p>
   <div class="filters">
-    <a href="/dashboard?status=all" class="{{ 'active' if status == 'all' else '' }}">Todas</a>
-    <a href="/dashboard?status=new" class="{{ 'active' if status == 'new' else '' }}">Nuevas</a>
-    <a href="/dashboard?status=viewed" class="{{ 'active' if status == 'viewed' else '' }}">Vistas</a>
-    <a href="/dashboard?status=applied" class="{{ 'active' if status == 'applied' else '' }}">Aplicadas</a>
-    <a href="/dashboard?status=discarded" class="{{ 'active' if status == 'discarded' else '' }}">Descartadas</a>
+    <a href="/dashboard?status=all{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}" class="{{ 'active' if status == 'all' else '' }}">Todas</a>
+    <a href="/dashboard?status=new{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}" class="{{ 'active' if status == 'new' else '' }}">Nuevas</a>
+    <a href="/dashboard?status=viewed{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}" class="{{ 'active' if status == 'viewed' else '' }}">Vistas</a>
+    <a href="/dashboard?status=applied{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}" class="{{ 'active' if status == 'applied' else '' }}">Aplicadas</a>
+    <a href="/dashboard?status=discarded{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}" class="{{ 'active' if status == 'discarded' else '' }}">Descartadas</a>
   </div>
-  <p class="muted">
-    Filtrar por variante de busqueda:
-    <select onchange="location.href='/dashboard?status={{ status }}{{ '&show_skipped=1' if show_skipped else '' }}{{ '&show_discarded=1' if show_discarded else '' }}&variant_id=' + this.value">
-      <option value="all" {{ 'selected' if variant_id == 'all' else '' }}>Todas las variantes</option>
-      {% for v in variants %}
-      <option value="{{ v.id }}" {{ 'selected' if variant_id == v.id|string else '' }}>{{ v.query_text }}</option>
-      {% endfor %}
-    </select>
-  </p>
+  <div style="display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center;margin:0.85rem 0;">
+    <p class="muted" style="margin:0;">
+      Filtrar por variante:
+      <select onchange="location.href='/dashboard?status={{ status }}{{ '&show_skipped=1' if show_skipped else '' }}{{ '&show_discarded=1' if show_discarded else '' }}&source={{ source }}&variant_id=' + this.value">
+        <option value="all" {{ 'selected' if variant_id == 'all' else '' }}>Todas las variantes</option>
+        {% for v in variants %}
+        <option value="{{ v.id }}" {{ 'selected' if variant_id == v.id|string else '' }}>{{ v.query_text }}</option>
+        {% endfor %}
+      </select>
+    </p>
+    <p class="muted" style="margin:0;">
+      Filtrar por fuente:
+      <select onchange="location.href='/dashboard?status={{ status }}{{ '&show_skipped=1' if show_skipped else '' }}{{ '&show_discarded=1' if show_discarded else '' }}&variant_id={{ variant_id }}&source=' + this.value">
+        <option value="all" {{ 'selected' if source == 'all' else '' }}>Todas las fuentes</option>
+        {% for src in available_sources %}
+        <option value="{{ src.id }}" {{ 'selected' if source == src.id else '' }}>{{ src.name }}</option>
+        {% endfor %}
+      </select>
+    </p>
+  </div>
   <p class="muted">
     Solo se muestran ofertas que cumplen los requisitos duros de la descripcion (anios de experiencia, certificaciones, idioma...) segun la evaluacion del LLM.
     {% if show_skipped %}
-      <a href="/dashboard?status={{ status }}&variant_id={{ variant_id }}{{ '&show_discarded=1' if show_discarded else '' }}">Ocultar las que no cumplen requisitos</a>
+      <a href="/dashboard?status={{ status }}&variant_id={{ variant_id }}&source={{ source }}{{ '&show_discarded=1' if show_discarded else '' }}">Ocultar las que no cumplen requisitos</a>
     {% else %}
-      <a href="/dashboard?status={{ status }}&show_skipped=1&variant_id={{ variant_id }}{{ '&show_discarded=1' if show_discarded else '' }}">Ver tambien las que no cumplen requisitos (auditoria)</a>
+      <a href="/dashboard?status={{ status }}&show_skipped=1&variant_id={{ variant_id }}&source={{ source }}{{ '&show_discarded=1' if show_discarded else '' }}">Ver tambien las que no cumplen requisitos (auditoria)</a>
     {% endif %}
   </p>
   {% if status == 'all' %}
   <p class="muted">
     Las ofertas descartadas se ocultan por defecto (no se borran).
     {% if show_discarded %}
-      <a href="/dashboard?status={{ status }}&variant_id={{ variant_id }}{{ '&show_skipped=1' if show_skipped else '' }}">Ocultar descartadas</a>
+      <a href="/dashboard?status={{ status }}&variant_id={{ variant_id }}&source={{ source }}{{ '&show_skipped=1' if show_skipped else '' }}">Ocultar descartadas</a>
     {% else %}
-      <a href="/dashboard?status={{ status }}&show_discarded=1&variant_id={{ variant_id }}{{ '&show_skipped=1' if show_skipped else '' }}">Ver tambien las descartadas</a>
+      <a href="/dashboard?status={{ status }}&show_discarded=1&variant_id={{ variant_id }}&source={{ source }}{{ '&show_skipped=1' if show_skipped else '' }}">Ver tambien las descartadas</a>
     {% endif %}
   </p>
   {% endif %}
@@ -186,6 +208,22 @@ function restoreJob(id) {
 
 let discoveryPollInterval = null;
 
+function updateDiscoveryButtonText() {
+  const sel = document.getElementById('discovery-source-select');
+  const btnText = document.getElementById('btn-discovery-text');
+  if (!sel || !btnText) return;
+  const val = sel.value;
+  if (val === 'all') {
+    btnText.innerText = 'Buscar en todas las fuentes';
+  } else if (val === 'linkedin') {
+    btnText.innerText = 'Buscar en LinkedIn';
+  } else {
+    const opt = sel.options[sel.selectedIndex];
+    const cleanLabel = opt ? opt.text.split('(')[0].trim() : val;
+    btnText.innerText = 'Buscar en ' + cleanLabel;
+  }
+}
+
 function checkDiscoveryStatus() {
   fetch('/api/jobs/discovery-status')
     .then(function(r) { return r.json(); })
@@ -224,7 +262,7 @@ function checkDiscoveryStatus() {
           btn.style.cursor = 'pointer';
         }
         if (btnIcon) btnIcon.innerText = '🔍';
-        if (btnText) btnText.innerText = 'Buscar nuevas ofertas en LinkedIn';
+        updateDiscoveryButtonText();
 
         if (data.status === 'completed') {
           const lastAck = sessionStorage.getItem('discovery_last_ack');
@@ -261,6 +299,9 @@ function triggerDiscovery() {
   sessionStorage.removeItem('discovery_last_ack');
   sessionStorage.removeItem('discovery_last_error');
 
+  const sel = document.getElementById('discovery-source-select');
+  const selectedSource = sel ? sel.value : 'all';
+
   const btn = document.getElementById('btn-trigger-discovery');
   const btnText = document.getElementById('btn-discovery-text');
   const btnIcon = document.getElementById('btn-discovery-icon');
@@ -272,7 +313,11 @@ function triggerDiscovery() {
   if (btnIcon) btnIcon.innerText = '⏳';
   if (btnText) btnText.innerText = 'Iniciando búsqueda...';
 
-  fetch('/api/jobs/trigger-discovery', { method: 'POST' })
+  fetch('/api/jobs/trigger-discovery', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source: selectedSource })
+  })
     .then(function(r) {
       return r.json().then(function(body) { return { status: r.status, body: body }; });
     })
@@ -287,7 +332,7 @@ function triggerDiscovery() {
           btn.style.cursor = 'pointer';
         }
         if (btnIcon) btnIcon.innerText = '🔍';
-        if (btnText) btnText.innerText = 'Buscar nuevas ofertas en LinkedIn';
+        updateDiscoveryButtonText();
       }
     })
     .catch(function() {
@@ -298,11 +343,14 @@ function triggerDiscovery() {
         btn.style.cursor = 'pointer';
       }
       if (btnIcon) btnIcon.innerText = '🔍';
-      if (btnText) btnText.innerText = 'Buscar nuevas ofertas en LinkedIn';
+      updateDiscoveryButtonText();
     });
 }
 
-document.addEventListener('DOMContentLoaded', checkDiscoveryStatus);
+document.addEventListener('DOMContentLoaded', function() {
+  updateDiscoveryButtonText();
+  checkDiscoveryStatus();
+});
 </script>
 {% endif %}
 {% endblock %}

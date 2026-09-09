@@ -26,6 +26,7 @@ MIGRATION_FILES = [
     "sql/005_discard_reason.sql",
     "sql/006_salary_raw.sql",
     "sql/007_multi_user.sql",
+    "sql/009_enabled_sources.sql",
 ]
 
 DEFAULT_USERS = [

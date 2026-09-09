@@ -25,6 +25,7 @@ class Profile(Base):
     remote_preference = Column(String)
     role_family = Column(ARRAY(String))
     min_salary = Column(Integer)
+    enabled_sources = Column(ARRAY(String), default=["linkedin"])
 
 
 class JobOffer(Base):

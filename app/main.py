@@ -27,6 +27,7 @@ from app.auth import (
 from pipeline.cv_extractor import extract_cv
 from pipeline.embeddings import to_pgvector_literal
 from pipeline.query_variants import get_all_variants, generate_variants_via_llm, add_ai_variants, seed_default_variants
+from pipeline.scrapers.registry import get_all_sources_metadata
 
 load_dotenv()
 
@@ -42,8 +43,10 @@ def startup_db_migrations():
         engine = get_engine()
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE profile ALTER COLUMN embedding DROP NOT NULL;"))
+            conn.execute(text("ALTER TABLE profile ADD COLUMN IF NOT EXISTS enabled_sources TEXT[] DEFAULT '{\"linkedin\"}';"))
+            conn.execute(text("UPDATE profile SET enabled_sources = '{\"linkedin\"}' WHERE enabled_sources IS NULL OR array_length(enabled_sources, 1) IS NULL;"))
     except Exception as e:
-        print(f"[startup] Info restriccion embedding: {e}")
+        print(f"[startup] Info migraciones BD: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -249,12 +252,14 @@ def onboarding_form(request: Request, current_user: dict = Depends(get_current_u
     with engine.connect() as conn:
         row = conn.execute(
             text("""
-                SELECT raw_cv_text, location_preference, remote_preference, role_family, min_salary
+                SELECT raw_cv_text, location_preference, remote_preference, role_family, min_salary, enabled_sources
                 FROM profile WHERE user_id = :uid
             """),
             {"uid": user_id},
         ).mappings().first()
     profile = dict(row) if row else None
+    if profile and not profile.get("enabled_sources"):
+        profile["enabled_sources"] = ["linkedin"]
 
     try:
         variants = get_all_variants(engine, user_id=user_id)
@@ -280,6 +285,7 @@ def onboarding_form(request: Request, current_user: dict = Depends(get_current_u
             "has_profile": profile is not None,
             "profile": profile,
             "variants": clean_variants,
+            "all_sources": get_all_sources_metadata(),
         },
     )
 
@@ -292,6 +298,7 @@ def onboarding_submit(
     remote_preference: str = Form("any"),
     role_family: str = Form(""),
     min_salary: str = Form(""),
+    enabled_sources: str = Form("linkedin"),
     variants_json: str = Form("[]"),
     current_user: dict = Depends(get_current_user),
 ):
@@ -316,15 +323,18 @@ def onboarding_submit(
 
     roles = [r.strip() for r in role_family.split(",") if r.strip()]
     salary = int(min_salary) if min_salary.strip().isdigit() else None
+    sources_list = [s.strip().lower() for s in enabled_sources.split(",") if s.strip()]
+    if not sources_list:
+        sources_list = ["linkedin"]
 
     engine = get_engine()
     with engine.begin() as conn:
         profile_id = conn.execute(
             text("""
                 INSERT INTO profile (user_id, raw_cv_text, extracted_json, embedding, location_preference,
-                    remote_preference, role_family, min_salary)
+                    remote_preference, role_family, min_salary, enabled_sources)
                 VALUES (:user_id, :raw_cv_text, CAST(:extracted_json AS jsonb), CAST(:embedding AS vector), :location_preference,
-                    :remote_preference, :role_family, :min_salary)
+                    :remote_preference, :role_family, :min_salary, :enabled_sources)
                 ON CONFLICT (user_id) DO UPDATE SET
                     raw_cv_text = EXCLUDED.raw_cv_text,
                     extracted_json = EXCLUDED.extracted_json,
@@ -333,6 +343,7 @@ def onboarding_submit(
                     remote_preference = EXCLUDED.remote_preference,
                     role_family = EXCLUDED.role_family,
                     min_salary = EXCLUDED.min_salary,
+                    enabled_sources = EXCLUDED.enabled_sources,
                     updated_at = now()
                 RETURNING id
             """),
@@ -345,6 +356,7 @@ def onboarding_submit(
                 "remote_preference": remote_preference,
                 "role_family": roles,
                 "min_salary": salary,
+                "enabled_sources": sources_list,
             },
         ).scalar()
 
@@ -557,6 +569,7 @@ def dashboard(
     show_skipped: str = "",
     show_discarded: str = "",
     variant_id: str = "all",
+    source: str = "all",
     current_user: dict = Depends(get_current_user),
 ):
     show_skipped_bool = _parse_bool_param(show_skipped)
@@ -585,6 +598,9 @@ def dashboard(
     if variant_id != "all" and variant_id.strip().isdigit():
         query += " AND jo.variant_id = :variant_id"
         params["variant_id"] = int(variant_id)
+    if source != "all" and source.strip():
+        query += " AND jo.source = :source"
+        params["source"] = source.strip().lower()
     query += " ORDER BY js.final_score DESC LIMIT 100"
 
     with engine.connect() as conn:
@@ -612,6 +628,8 @@ def dashboard(
             "variant_id": variant_id,
             "variants": variants,
             "pending_llm_count": pending_llm_count,
+            "source": source,
+            "available_sources": get_all_sources_metadata(),
         },
     )
 
@@ -675,23 +693,37 @@ def update_job_status(job_score_id: int, payload: JobStatusUpdate, current_user:
 _discovery_tasks: dict[int, dict] = {}
 
 
-def _run_user_discovery_background(user_id: int, username: str):
+def _run_user_discovery_background(user_id: int, username: str, source: str = "all"):
+    clean_source = source.strip().lower() if source else "all"
+    source_label = "LinkedIn" if clean_source == "linkedin" else ("todas las fuentes" if clean_source == "all" else clean_source.capitalize())
+
     _discovery_tasks[user_id] = {
         "status": "running",
-        "stage": "linkedin_scrape",
-        "message": f"Buscando vacantes en LinkedIn para {username}...",
+        "stage": "discovery",
+        "source": clean_source,
+        "message": f"Buscando vacantes en {source_label} para {username}...",
         "started_at": datetime.now(timezone.utc).isoformat(),
         "new_jobs_found": 0,
         "evaluated_count": 0,
         "error": None,
     }
     try:
-        from pipeline.run_linkedin_guest import main as run_linkedin
+        from pipeline.job_discovery import run_discovery
         from pipeline.run_llm_evaluation import main as run_llm
 
-        # 1. Scraping de LinkedIn para este usuario
-        linkedin_res = run_linkedin(target_user_id=user_id)
-        new_jobs = (linkedin_res or {}).get("new_jobs_found", 0)
+        def on_progress(msg: str):
+            if user_id in _discovery_tasks:
+                _discovery_tasks[user_id]["message"] = msg
+
+        engine = get_engine()
+        # 1. Scraping modular para este usuario y fuentes
+        discovery_res = run_discovery(
+            engine,
+            target_user_id=user_id,
+            sources=clean_source,
+            progress_callback=on_progress,
+        )
+        new_jobs = (discovery_res or {}).get("new_jobs_found", 0)
         _discovery_tasks[user_id]["new_jobs_found"] = new_jobs
 
         # 2. Evaluación con LLM para las ofertas pendientes de este usuario
@@ -706,7 +738,7 @@ def _run_user_discovery_background(user_id: int, username: str):
         _discovery_tasks[user_id]["stage"] = "done"
         _discovery_tasks[user_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
         _discovery_tasks[user_id]["message"] = (
-            f"Proceso finalizado: {new_jobs} nueva{'s' if new_jobs != 1 else ''} vacante{'s' if new_jobs != 1 else ''} "
+            f"Proceso finalizado ({source_label}): {new_jobs} nueva{'s' if new_jobs != 1 else ''} vacante{'s' if new_jobs != 1 else ''} "
             f"y {eval_count} evaluada{'s' if eval_count != 1 else ''} con éxito."
         )
     except Exception as e:
@@ -716,13 +748,30 @@ def _run_user_discovery_background(user_id: int, username: str):
         _discovery_tasks[user_id]["message"] = f"Error durante la búsqueda: {e}"
 
 
+@app.get("/api/sources")
+def get_sources_api():
+    return {"sources": get_all_sources_metadata()}
+
+
 @app.post("/api/jobs/trigger-discovery")
-def trigger_user_discovery(
+async def trigger_user_discovery(
+    request: Request,
     background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user),
 ):
     user_id = current_user["id"]
     username = current_user["username"]
+
+    source = "all"
+    try:
+        data = await request.json()
+        if isinstance(data, dict) and data.get("source"):
+            source = data["source"].strip()
+    except Exception:
+        pass
+
+    if source == "all" and request.query_params.get("source"):
+        source = request.query_params.get("source").strip()
 
     current_task = _discovery_tasks.get(user_id)
     if current_task and current_task.get("status") == "running":
@@ -738,14 +787,15 @@ def trigger_user_discovery(
     _discovery_tasks[user_id] = {
         "status": "running",
         "stage": "starting",
+        "source": source,
         "message": "Iniciando búsqueda de ofertas...",
         "started_at": datetime.now(timezone.utc).isoformat(),
         "new_jobs_found": 0,
         "evaluated_count": 0,
         "error": None,
     }
-    background_tasks.add_task(_run_user_discovery_background, user_id, username)
-    return {"status": "started", "message": f"Búsqueda iniciada para {username}."}
+    background_tasks.add_task(_run_user_discovery_background, user_id, username, source)
+    return {"status": "started", "message": f"Búsqueda iniciada para {username}.", "source": source}
 
 
 @app.get("/api/jobs/discovery-status")

@@ -20,13 +20,14 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt
-      - name: Run LinkedIn Guest Scraper
-        run: python pipeline/run_linkedin_guest.py
+      - name: Run Multi-Source Job Discovery (LinkedIn + TopSalaries)
+        run: python pipeline/run_discovery.py
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           LINKEDIN_HOURS_AGO: '4'
           LINKEDIN_MAX_JOBS_PER_VARIANT: '25'
           TARGET_USER_ID: ${{ github.event.inputs.target_user_id || '' }}
+          DISCOVERY_SOURCES: 'all'
       - name: Run LLM Evaluation
         if: always()
         run: python pipeline/run_llm_evaluation.py

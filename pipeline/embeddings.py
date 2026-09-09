@@ -46,8 +46,10 @@ def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     return float(np.dot(a, b) / denom)
 
 
-def to_pgvector_literal(vec: list[float]) -> str:
+def to_pgvector_literal(vec: list[float] | None) -> str | None:
     """Serializa una lista de floats al formato de texto que pgvector espera (ej. '[0.1,0.2,...]')."""
+    if not vec:
+        return None
     return "[" + ",".join(repr(float(v)) for v in vec) + "]"
 
 

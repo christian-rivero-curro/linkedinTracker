@@ -299,7 +299,17 @@ def onboarding_submit(
             "languages": [],
             "certifications": [],
         }
-    embedding = embed_text(raw_cv_text)
+    embedding = None
+    # En entornos como Render (512MB RAM), no cargamos PyTorch/sentence-transformers en el proceso web
+    # para evitar OOM (Out of Memory) y caídas 502 Bad Gateway.
+    # El runner de GitHub Actions (7GB RAM) calculará y persistirá el vector del perfil
+    # durante la siguiente ejecución del pipeline.
+    if not os.environ.get("RENDER"):
+        try:
+            embedding = embed_text(raw_cv_text)
+        except Exception as e:
+            print(f"[onboarding] Aviso: No se pudo generar embedding local ({e}). Se delegará a GitHub Actions.")
+
     roles = [r.strip() for r in role_family.split(",") if r.strip()]
     salary = int(min_salary) if min_salary.strip().isdigit() else None
 
@@ -314,7 +324,7 @@ def onboarding_submit(
                 ON CONFLICT (user_id) DO UPDATE SET
                     raw_cv_text = EXCLUDED.raw_cv_text,
                     extracted_json = EXCLUDED.extracted_json,
-                    embedding = EXCLUDED.embedding,
+                    embedding = COALESCE(EXCLUDED.embedding, profile.embedding),
                     location_preference = EXCLUDED.location_preference,
                     remote_preference = EXCLUDED.remote_preference,
                     role_family = EXCLUDED.role_family,
@@ -363,16 +373,18 @@ def onboarding_submit(
                     continue
                 is_active = bool(item.get("is_active", True))
                 source = item.get("source") or "manual"
+                if source not in ("ai", "manual"):
+                    source = "manual"
                 item_id = item.get("id")
 
                 if item_id and item_id in existing_ids:
                     conn.execute(
                         text("""
                             UPDATE search_query_variant
-                            SET query_text = :qt, is_active = :act, order_index = :idx, updated_at = now()
+                            SET query_text = :qt, is_active = :act, order_index = :idx, profile_id = :pid, updated_at = now()
                             WHERE id = :id AND user_id = :uid
                         """),
-                        {"qt": q_text, "act": is_active, "idx": idx, "id": item_id, "uid": user_id},
+                        {"qt": q_text, "act": is_active, "idx": idx, "pid": profile_id, "id": item_id, "uid": user_id},
                     )
                 else:
                     conn.execute(

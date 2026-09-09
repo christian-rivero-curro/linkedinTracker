@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS profile (
     id SERIAL PRIMARY KEY,
     raw_cv_text TEXT NOT NULL,
     extracted_json JSONB NOT NULL,
-    embedding VECTOR(384) NOT NULL,
+    embedding VECTOR(384),
     location_preference TEXT,
     remote_preference TEXT CHECK (remote_preference IN ('remote','hybrid','onsite','any')),
     role_family TEXT[] NOT NULL,

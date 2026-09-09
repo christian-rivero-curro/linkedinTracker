@@ -46,7 +46,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.db import get_engine  # noqa: E402
 from pipeline.jsearch_client import search_jobs, normalize_job  # noqa: E402
-from pipeline.embeddings import parse_pgvector  # noqa: E402
+from pipeline.embeddings import parse_pgvector, embed_text, to_pgvector_literal  # noqa: E402
 from pipeline.job_ingest import process_and_store_job  # noqa: E402
 from pipeline.query_variants import get_or_seed_variants, mark_variant_run  # noqa: E402
 
@@ -104,6 +104,20 @@ def load_profile_by_user(engine, user_id: int) -> dict | None:
         return None
     profile = dict(row)
     profile["embedding"] = parse_pgvector(profile["embedding"])
+    if not profile["embedding"] and profile.get("raw_cv_text"):
+        try:
+            print(f"[discovery] Generando vector de perfil para user_id={user_id}...")
+            emb = embed_text(profile["raw_cv_text"])
+            if emb:
+                profile["embedding"] = emb
+                with engine.begin() as save_conn:
+                    save_conn.execute(
+                        text("UPDATE profile SET embedding = CAST(:emb AS vector) WHERE user_id = :uid"),
+                        {"emb": to_pgvector_literal(emb), "uid": user_id},
+                    )
+                print(f"[discovery] Vector generado y guardado para user_id={user_id}.")
+        except Exception as e:
+            print(f"[discovery] Error autogenerando embedding para user_id={user_id}: {e}")
     return profile
 
 

@@ -1,8 +1,7 @@
 """
-Logica de insercion COMPARTIDA entre todas las fuentes de descubrimiento de
-ofertas (JSearch, scraper de LinkedIn, futuras fuentes). Cada fuente convierte
-sus datos crudos a este formato normalizado antes de llamar a
-process_and_store_job():
+Logica de insercion COMPARTIDA para el descubrimiento de ofertas (LinkedIn Guest Scraper,
+scraper autenticado, futuras fuentes). Cada fuente convierte sus datos crudos
+a este formato normalizado antes de llamar a process_and_store_job():
 
 {
     "external_id": str,       # unico por fuente+oferta, ej. "linkedin_4123456789"
@@ -17,11 +16,6 @@ process_and_store_job():
     "salary_max": int | None,
     "posted_at": datetime | str | None,
 }
-
-Centralizar esto evita que la logica de dedup/filtros/embedding diverja entre
-JSearch y el scraper de LinkedIn. El parametro verbose (por defecto False,
-para no ensuciar los logs del cron de JSearch cada 4h) imprime el motivo
-exacto por el que se descarta cada oferta - activado por run_linkedin_scrape.py.
 """
 import os
 from datetime import datetime, timedelta, timezone
@@ -42,7 +36,7 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
-MAX_JOB_AGE_DAYS = max(1, _int_env("JSEARCH_MAX_JOB_AGE_DAYS", 35))
+MAX_JOB_AGE_DAYS = max(1, _int_env("MAX_JOB_AGE_DAYS", _int_env("JSEARCH_MAX_JOB_AGE_DAYS", 35)))
 
 
 def safe_text(value) -> str:

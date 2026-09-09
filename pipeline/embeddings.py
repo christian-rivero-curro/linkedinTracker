@@ -17,7 +17,7 @@ def _get_model():
 def _sanitize_text(value) -> str:
     """
     Fuerza a str y elimina caracteres invalidos (surrogates sueltos, mojibake)
-    que a veces llegan en descripciones agregadas por JSearch desde sitios
+    que a veces llegan en descripciones de ofertas desde sitios
     externos. El tokenizer de sentence-transformers (backend en Rust) no da un
     error de decodificacion claro ante esto, sino el mensaje criptico
     'TextEncodeInput must be Union[TextInputSequence, Tuple[...]]'.

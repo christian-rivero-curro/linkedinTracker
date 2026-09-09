@@ -22,7 +22,7 @@ los jobs siguientes de esa variante fallaban en cascada con
 'current transaction is aborted', aunque fueran validos.
 
 Reutiliza pipeline/job_ingest.py (verbose=True) - mismo pipeline de scoring
-vectorial + evaluacion LLM que run_discovery.py.
+vectorial + evaluacion LLM.
 
 Fail-soft con una excepcion deliberada: si LinkedIn devuelve un
 checkpoint/bloqueo, el script para INMEDIATAMENTE sin reintentar.

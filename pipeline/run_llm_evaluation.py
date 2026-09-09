@@ -1,7 +1,6 @@
 """
-Evalua con el LLM todas las ofertas pendientes (job_score.llm_evaluated = FALSE),
-sin esperar al ciclo de descubrimiento de JSearch (que sigue siendo cada 4h
-porque esa cuota si es limitada de verdad).
+Evalua con el LLM todas las ofertas pendientes (job_score.llm_evaluated = FALSE)
+tras el ciclo de scraping de LinkedIn.
 
 Este script esta pensado para ejecutarse con mucha mas frecuencia (cada 5
 minutos via GitHub Actions, el minimo real que admite su sintaxis de cron) ya

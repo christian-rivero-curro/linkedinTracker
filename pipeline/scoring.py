@@ -169,7 +169,7 @@ def get_evaluation_prompt_template() -> str:
     En caso contrario, se carga la plantilla predeterminada de PROMPT_PATH.
     """
     env_prompt = os.environ.get("LLM_EVALUATION_PROMPT", "").strip()
-    if env_prompt:
+    if env_prompt and env_prompt.upper() != "XXX":
         return env_prompt.replace("\\n", "\n")
     return PROMPT_PATH.read_text(encoding="utf-8")
 

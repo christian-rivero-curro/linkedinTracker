@@ -1,4 +1,4 @@
--- Variantes de query de busqueda para JSearch, editables desde /onboarding.
+-- Variantes de query de busqueda para ofertas de empleo, editables desde /onboarding.
 -- Permite rotar entre varias combinaciones rol/skill en lugar de una unica query fija,
 -- y llevar un cursor temporal por variante para no reprocesar las mismas ofertas entre ejecuciones.
 

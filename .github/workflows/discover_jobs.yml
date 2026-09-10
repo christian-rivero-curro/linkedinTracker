@@ -1,7 +1,7 @@
 name: discover_jobs
 on:
   schedule:
-    - cron: '0 */4 * * *'
+    - cron: '17 */4 * * *'
   workflow_dispatch:
     inputs:
       target_user_id:

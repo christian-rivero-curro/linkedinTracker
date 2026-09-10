@@ -16,16 +16,19 @@ Modalidad: {job_remote_type}
 Descripcion:
 {job_description}
 
-Evalua el encaje real entre el perfil y la oferta. Se riguroso, analitico y objetivo: no infles la puntuacion solo porque haya coincidencias superficiales de palabras clave.
+Evalua el encaje real entre el perfil y la oferta. Se riguroso, analitico y objetivo: no infles la puntuacion solo porque haya coincidencias superficiales de palabras clave o porque el sector de la empresa sea tangencial.
 
 CRITERIOS ESTRICTOS DE EVALUACIÓN Y DESCARTE (REQUISITOS DUROS):
 Presta especial atencion a requisitos excluyentes y barreras de entrada que aparezcan en la descripcion:
-1. Años de experiencia minima: Si la oferta exige mas años de experiencia de los que posee el candidato (por ejemplo, la oferta exige 5, 7, 8 o 10+ años de experiencia, o es un rol Senior/Staff/Lead que requiere una trayectoria extensa incompatible con los ~{candidate_years} años del candidato), DEBES MARCAR OBLIGATORIAMENTE recommendation="skip".
-2. Titulacion academica o certificaciones obligatorias que el candidato no tenga segun su perfil.
-3. Idioma obligatorio que el candidato no hable con fluidez segun el perfil.
-4. Presencia de palabras clave o condiciones expresamente excluidas ({excluded_keywords_summary}).
-5. Autorizacion legal para trabajar / ubicacion presencial no viable.
-6. Salario o banda salarial: Revisa el texto completo de la oferta para detectar si se menciona explícitamente una cifra, rango o banda salarial (ejemplo: "45.000€ - 55.000€", "35.000 - 42.000 EUR", "60k - 70k €/año", "$90,000 - $110,000", "50k"). Si aparece, extrae el texto formateado en el campo "salary" como string. Si no se menciona ningún salario, devuelve null.
+1. Encaje de Rol y Perfiles Transversales / Funcionales:
+   - Se admiten roles fuera del título exacto del candidato (por ejemplo: roles funcionales, consultoría, research, analista, personas, operaciones o diseño) SI Y SOLO SI la oferta MENCIONA, VALORA o REQUIERE EXPLÍCITAMENTE la disciplina de origen, formación o especialidad del candidato (por ejemplo: piden o valoran 'formación en Psicología', 'ciencias del comportamiento', 'evaluación de conducta/personas', 'People Analytics', etc.).
+   - DESCARTE OBLIGATORIO (recommendation="skip"): Si la oferta es de otra disciplina (ej. Product Manager, Software Engineer, Finanzas, etc.) y en el texto NO se menciona ni se valora en ningún punto la formación, competencias o disciplina de origen del candidato, DEBES MARCAR OBLIGATORIAMENTE recommendation="skip" y score < 20. Está TERMINANTEMENTE PROHIBIDO marcar "consider" basándote únicamente en que la empresa vende un producto del sector del candidato (ejemplo: que la empresa desarrolle software de reclutamiento/RRHH NO hace apto a un psicólogo para ser su Product Manager si la oferta no busca expresamente perfiles de psicología/conducta).
+2. Años de experiencia minima: Si la oferta exige mas años de experiencia de los que posee el candidato (por ejemplo, la oferta exige 5, 7, 8 o 10+ años de experiencia, o es un rol Senior/Staff/Lead que requiere una trayectoria extensa incompatible con los ~{candidate_years} años del candidato), DEBES MARCAR OBLIGATORIAMENTE recommendation="skip".
+3. Titulacion academica o certificaciones obligatorias que el candidato no tenga segun su perfil.
+4. Idioma obligatorio que el candidato no hable con fluidez segun el perfil.
+5. Presencia de palabras clave o condiciones expresamente excluidas ({excluded_keywords_summary}).
+6. Autorizacion legal para trabajar / ubicacion presencial no viable.
+7. Salario o banda salarial: Revisa el texto completo de la oferta para detectar si se menciona explícitamente una cifra, rango o banda salarial (ejemplo: "45.000€ - 55.000€", "35.000 - 42.000 EUR", "60k - 70k €/año", "$90,000 - $110,000", "50k"). Si aparece, extrae el texto formateado en el campo "salary" como string. Si no se menciona ningún salario, devuelve null.
 
 CUALQUIER oferta con recommendation="skip" sera DESCARTADA AUTOMATICAMENTE y no se presentara al usuario en el portal activo.
 - Si usas "skip", explica con absoluta claridad la razon en el primer elemento de missing_requirements (ejemplo: "Exige 8+ años de experiencia y el candidato tiene 3-4 años" o "Requiere certificación AWS Solutions Architect Professional obligatoria no presente en el perfil").

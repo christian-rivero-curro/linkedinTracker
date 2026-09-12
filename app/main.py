@@ -45,6 +45,8 @@ def startup_db_migrations():
             conn.execute(text("ALTER TABLE profile ALTER COLUMN embedding DROP NOT NULL;"))
             conn.execute(text("ALTER TABLE profile ADD COLUMN IF NOT EXISTS enabled_sources TEXT[] DEFAULT '{\"linkedin\"}';"))
             conn.execute(text("UPDATE profile SET enabled_sources = '{\"linkedin\"}' WHERE enabled_sources IS NULL OR array_length(enabled_sources, 1) IS NULL;"))
+            conn.execute(text("ALTER TABLE profile ADD COLUMN IF NOT EXISTS excluded_roles TEXT[] DEFAULT '{}';"))
+            conn.execute(text("ALTER TABLE profile ADD COLUMN IF NOT EXISTS excluded_keywords TEXT[] DEFAULT '{}';"))
     except Exception as e:
         print(f"[startup] Info migraciones BD: {e}")
 
@@ -252,7 +254,8 @@ def onboarding_form(request: Request, current_user: dict = Depends(get_current_u
     with engine.connect() as conn:
         row = conn.execute(
             text("""
-                SELECT raw_cv_text, location_preference, remote_preference, role_family, min_salary, enabled_sources
+                SELECT raw_cv_text, location_preference, remote_preference, role_family, min_salary, enabled_sources,
+                       excluded_roles, excluded_keywords
                 FROM profile WHERE user_id = :uid
             """),
             {"uid": user_id},
@@ -298,6 +301,8 @@ def onboarding_submit(
     remote_preference: str = Form("any"),
     role_family: str = Form(""),
     min_salary: str = Form(""),
+    excluded_roles: str = Form(""),
+    excluded_keywords: str = Form(""),
     enabled_sources: str = Form("linkedin"),
     variants_json: str = Form("[]"),
     current_user: dict = Depends(get_current_user),
@@ -323,6 +328,8 @@ def onboarding_submit(
 
     roles = [r.strip() for r in role_family.split(",") if r.strip()]
     salary = int(min_salary) if min_salary.strip().isdigit() else None
+    roles_excluded = [r.strip() for r in excluded_roles.split(",") if r.strip()]
+    keywords_excluded = [k.strip() for k in excluded_keywords.split(",") if k.strip()]
     sources_list = [s.strip().lower() for s in enabled_sources.split(",") if s.strip()]
     if not sources_list:
         sources_list = ["linkedin"]
@@ -332,9 +339,9 @@ def onboarding_submit(
         profile_id = conn.execute(
             text("""
                 INSERT INTO profile (user_id, raw_cv_text, extracted_json, embedding, location_preference,
-                    remote_preference, role_family, min_salary, enabled_sources)
+                    remote_preference, role_family, min_salary, enabled_sources, excluded_roles, excluded_keywords)
                 VALUES (:user_id, :raw_cv_text, CAST(:extracted_json AS jsonb), CAST(:embedding AS vector), :location_preference,
-                    :remote_preference, :role_family, :min_salary, :enabled_sources)
+                    :remote_preference, :role_family, :min_salary, :enabled_sources, :excluded_roles, :excluded_keywords)
                 ON CONFLICT (user_id) DO UPDATE SET
                     raw_cv_text = EXCLUDED.raw_cv_text,
                     extracted_json = EXCLUDED.extracted_json,
@@ -344,6 +351,8 @@ def onboarding_submit(
                     role_family = EXCLUDED.role_family,
                     min_salary = EXCLUDED.min_salary,
                     enabled_sources = EXCLUDED.enabled_sources,
+                    excluded_roles = EXCLUDED.excluded_roles,
+                    excluded_keywords = EXCLUDED.excluded_keywords,
                     updated_at = now()
                 RETURNING id
             """),
@@ -357,6 +366,8 @@ def onboarding_submit(
                 "role_family": roles,
                 "min_salary": salary,
                 "enabled_sources": sources_list,
+                "excluded_roles": roles_excluded,
+                "excluded_keywords": keywords_excluded,
             },
         ).scalar()
 

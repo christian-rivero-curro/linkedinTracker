@@ -422,6 +422,32 @@
           >
           <span class="form-help">Opcional. Las ofertas por debajo de este suelo serán penalizadas.</span>
         </div>
+
+        <div class="form-group">
+          <label class="form-label" for="excluded_roles">Puestos o trabajos no deseados (descarte IA)</label>
+          <input
+            id="excluded_roles"
+            name="excluded_roles"
+            type="text"
+            class="form-input"
+            placeholder="ej. DevOps, Ciberseguridad, Analista Funcional"
+            value="{{ (profile.excluded_roles | join(', ')) if profile and profile.excluded_roles else '' }}"
+          >
+          <span class="form-help">Puestos que no te interesan. Si la oferta es 100% sobre ellos, la IA la descartará automáticamente.</span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="excluded_keywords">Palabras clave / tecnologías excluidas</label>
+          <input
+            id="excluded_keywords"
+            name="excluded_keywords"
+            type="text"
+            class="form-input"
+            placeholder="ej. PHP, WordPress, Cobol"
+            value="{{ (profile.excluded_keywords | join(', ')) if profile and profile.excluded_keywords else '' }}"
+          >
+          <span class="form-help">Tecnologías o términos específicos a descartar en el filtrado.</span>
+        </div>
       </div>
     </div>
 

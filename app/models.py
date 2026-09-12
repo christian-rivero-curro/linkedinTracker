@@ -26,6 +26,8 @@ class Profile(Base):
     role_family = Column(ARRAY(String))
     min_salary = Column(Integer)
     enabled_sources = Column(ARRAY(String), default=["linkedin"])
+    excluded_roles = Column(ARRAY(String), default=[])
+    excluded_keywords = Column(ARRAY(String), default=[])
 
 
 class JobOffer(Base):

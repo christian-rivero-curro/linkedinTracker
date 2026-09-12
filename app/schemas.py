@@ -8,6 +8,7 @@ class OnboardingRequest(BaseModel):
     remote_preference: str = "any"
     role_family: list[str] = []
     min_salary: Optional[int] = None
+    excluded_roles: list[str] = []
     excluded_keywords: list[str] = []
     enabled_sources: list[str] = ["linkedin"]
 

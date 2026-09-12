@@ -182,7 +182,7 @@ def main(target_user_id: int | None = None) -> dict:
                 text("""
                     SELECT js.id AS score_id, js.job_offer_id, js.vector_similarity, js.user_id,
                            COALESCE(u.username, 'user_' || js.user_id) AS username,
-                           p.extracted_json AS profile_json, p.remote_preference, p.min_salary, p.excluded_keywords,
+                           p.extracted_json AS profile_json, p.remote_preference, p.min_salary, p.excluded_keywords, p.excluded_roles,
                            jo.*
                     FROM job_score js
                     JOIN job_offer jo ON jo.id = js.job_offer_id
@@ -229,6 +229,7 @@ def main(target_user_id: int | None = None) -> dict:
                 "remote_preference": row["remote_preference"],
                 "min_salary": row["min_salary"],
                 "excluded_keywords": row["excluded_keywords"],
+                "excluded_roles": row.get("excluded_roles") or [],
             }
 
             try:

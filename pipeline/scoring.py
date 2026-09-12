@@ -183,10 +183,14 @@ def evaluate_job_with_llm(profile_json: dict, job: dict, profile_meta: dict | No
     excluded = (profile_meta and profile_meta.get("excluded_keywords")) or []
     excluded_summary = ", ".join(excluded) if excluded else "ninguna especificada"
 
+    excluded_roles = (profile_meta and profile_meta.get("excluded_roles")) or []
+    excluded_roles_summary = ", ".join(excluded_roles) if excluded_roles else "ninguno especificado"
+
     format_kwargs = {
         "profile_json": profile_json,
         "candidate_years": candidate_years,
         "candidate_seniority": candidate_seniority,
+        "excluded_roles_summary": excluded_roles_summary,
         "excluded_keywords_summary": excluded_summary,
         "job_title": job.get("title", ""),
         "job_company": job.get("company", ""),

@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS profile (
     role_family TEXT[] NOT NULL,
     min_salary INTEGER,
     excluded_keywords TEXT[],
+    excluded_roles TEXT[],
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );

@@ -1,4 +1,4 @@
-Eres un evaluador critico y objetivo de encaje entre un perfil profesional y una oferta de empleo.
+Eres un evaluador crítico y objetivo de encaje entre un perfil profesional y una oferta de empleo.
 
 Perfil del candidato (JSON):
 {profile_json}
@@ -6,6 +6,7 @@ Perfil del candidato (JSON):
 Resumen del perfil del candidato:
 - Años totales de experiencia profesional demostrable: ~{candidate_years} años.
 - Nivel de seniority del candidato: {candidate_seniority}.
+- Puestos o trabajos no deseados / excluidos: {excluded_roles_summary}
 - Palabras clave / tecnologías excluidas por el candidato: {excluded_keywords_summary}
 
 Oferta de empleo:
@@ -16,32 +17,59 @@ Modalidad: {job_remote_type}
 Descripcion:
 {job_description}
 
-Evalua el encaje real entre el perfil y la oferta. Se riguroso, analitico y objetivo: no infles la puntuacion solo porque haya coincidencias superficiales de palabras clave o porque el sector de la empresa sea tangencial.
+Evalúa el encaje real entre el perfil y la oferta. Sé riguroso, analítico y objetivo: no infles la puntuación por coincidencias superficiales de palabras clave. Prioriza el encaje real de rol, disciplina y experiencia por encima de similitudes de vocabulario.
 
-CRITERIOS ESTRICTOS DE EVALUACIÓN Y DESCARTE (REQUISITOS DUROS):
-Presta especial atencion a requisitos excluyentes y barreras de entrada que aparezcan en la descripcion:
-1. Encaje de Rol y Perfiles Transversales / Funcionales:
-   - Se admiten roles fuera del título exacto del candidato (por ejemplo: roles funcionales, consultoría, research, analista, personas, operaciones o diseño) SI Y SOLO SI la oferta MENCIONA, VALORA o REQUIERE EXPLÍCITAMENTE la disciplina de origen, formación o especialidad del candidato (por ejemplo: piden o valoran 'formación en Psicología', 'ciencias del comportamiento', 'evaluación de conducta/personas', 'People Analytics', etc.).
-   - DESCARTE OBLIGATORIO (recommendation="skip"): Si la oferta es de otra disciplina (ej. Product Manager, Software Engineer, Finanzas, etc.) y en el texto NO se menciona ni se valora en ningún punto la formación, competencias o disciplina de origen del candidato, DEBES MARCAR OBLIGATORIAMENTE recommendation="skip" y score < 20. Está TERMINANTEMENTE PROHIBIDO marcar "consider" basándote únicamente en que la empresa vende un producto del sector del candidato (ejemplo: que la empresa desarrolle software de reclutamiento/RRHH NO hace apto a un psicólogo para ser su Product Manager si la oferta no busca expresamente perfiles de psicología/conducta).
-2. Años de experiencia minima: Si la oferta exige mas años de experiencia de los que posee el candidato (por ejemplo, la oferta exige 5, 7, 8 o 10+ años de experiencia, o es un rol Senior/Staff/Lead que requiere una trayectoria extensa incompatible con los ~{candidate_years} años del candidato), DEBES MARCAR OBLIGATORIAMENTE recommendation="skip".
-3. Titulacion academica o certificaciones obligatorias que el candidato no tenga segun su perfil.
-4. Idioma obligatorio que el candidato no hable con fluidez segun el perfil.
-5. Presencia de palabras clave o condiciones expresamente excluidas ({excluded_keywords_summary}).
-6. Autorizacion legal para trabajar / ubicacion presencial no viable.
-7. Salario o banda salarial: Revisa el texto completo de la oferta para detectar si se menciona explícitamente una cifra, rango o banda salarial (ejemplo: "45.000€ - 55.000€", "35.000 - 42.000 EUR", "60k - 70k €/año", "$90,000 - $110,000", "50k"). Si aparece, extrae el texto formateado en el campo "salary" como string. Si no se menciona ningún salario, devuelve null.
+CRITERIOS ESTRICTOS DE EVALUACIÓN Y DESCARTE:
+Evalúa todos estos puntos. Si se incumple ALGUNO de los criterios de descarte automático, el "score" debe ser bajo (< 25, o < 20 en los criterios 4 y 9) y la "recommendation" DEBE ser "skip".
 
-CUALQUIER oferta con recommendation="skip" sera DESCARTADA AUTOMATICAMENTE y no se presentara al usuario en el portal activo.
-- Si usas "skip", explica con absoluta claridad la razon en el primer elemento de missing_requirements (ejemplo: "Exige 8+ años de experiencia y el candidato tiene 3-4 años" o "Requiere certificación AWS Solutions Architect Professional obligatoria no presente en el perfil").
-- Cuando uses "skip", el "score" debe ser un valor bajo (0 a 25) acorde a la incompatibilidad.
-- NO uses "skip" por simples gaps de skills tecnicas secundarias o requisitos valorables ("nice to have") que puedan aprenderse en el puesto — esos casos corresponden a recommendation="consider" o "apply".
+1. Brecha de experiencia (con tolerancia):
+   Si la oferta exige una experiencia que supera en MÁS DE 3 AÑOS a la del candidato (~{candidate_years} años), marca "skip" (ejemplo: pide 8+ y el candidato tiene 3). Si la diferencia es de 3 años o menos, asúmelo como un gap razonable y marca "consider" o "apply" según el resto de criterios.
 
-Devuelve UNICAMENTE un JSON valido (sin texto adicional, sin markdown, sin backticks) con este esquema exacto:
+2. Seniority incompatible:
+   Marca "skip" si el rol es de nivel directivo o estructuralmente superior (Staff, Principal, Head, Engineering Manager, Director, VP) y el candidato no tiene experiencia previa demostrable en ese nivel o liderando arquitecturas/equipos a gran escala. Las etiquetas "Senior" con perfiles Mid/Senior se consideran gaps asumibles y no motivo de descarte por sí solas.
 
+3. Subempleo o relación mercantil (descarte automático):
+   Marca "skip" si la oferta es explícitamente para Junior, Trainee, o Prácticas/Beca.
+
+4. Disciplina y rol (descarte automático):
+   Si la oferta es de una disciplina distinta a la del perfil (ejemplo: Product Manager vs. Psicólogo, o Backend vs. Data) Y el texto de la oferta NO menciona ni valora explícitamente la disciplina/formación de origen del candidato, marca "skip" con score < 20. El simple hecho de que la empresa opere en el sector o mercado del candidato NO justifica un encaje por sí solo.
+
+5. Conocimientos base incompatibles:
+   Marca "skip" si, más allá del título del puesto, los conocimientos técnicos o base requeridos son claramente ajenos al CV del candidato (por ejemplo, un stack tecnológico o dominio de negocio sin ninguna relación con su trayectoria). No aplica a skills secundarias o requisitos "nice to have", que pueden aprenderse en el puesto.
+
+6. Idioma obligatorio:
+   Marca "skip" si la oferta exige de forma obligatoria (no "valorable") un idioma que el candidato no habla con fluidez según su perfil.
+
+7. Autorización legal / ubicación presencial:
+   Marca "skip" si el candidato no tiene autorización legal para trabajar en la ubicación exigida, o si la oferta requiere presencialidad en una ubicación no viable para el candidato según su perfil.
+
+8. Titulación excluyente:
+   Marca "skip" si falta una titulación académica obligatoria (no "valorable") que el candidato no tenga según su perfil.
+
+9. Puestos o trabajos no deseados (descarte automático):
+   Marca "skip" si la oferta de empleo es de forma principal o 100% sobre alguno de los puestos o áreas funcionales no deseadas por el candidato: {excluded_roles_summary} (por ejemplo: ofertas cuyo rol y responsabilidades principales sean de DevOps, Ciberseguridad, Analista Funcional, etc.).
+   REGLA DE PRECISIÓN: Si el trabajo ofertado encaja con el rol objetivo del candidato y solo menciona estas áreas de forma secundaria, colaborativa o como herramienta auxiliar (ejemplo: "trabajará coordinándose con el equipo de DevOps" o "buenas prácticas de ciberseguridad"), NO lo descartes por este criterio; descártalo ÚNICAMENTE si el puesto en sí mismo es al 100% o predominantemente sobre el trabajo no deseado. Si se descarta por este punto, pon score < 20.
+
+10. Filtros del candidato (tecnologías o condiciones excluidas):
+   Marca "skip" si la oferta contiene tecnologías o condiciones expresamente excluidas por el candidato: {excluded_keywords_summary}.
+
+11. Salario:
+    Extrae cualquier cifra o rango salarial explícito mencionado en la oferta (ejemplo: "45.000€ - 55.000€", "35.000 - 42.000 EUR", "60k - 70k €/año", "$90,000 - $110,000", "50k") y devuélvelo como string en el campo "salary". Textos vagos como "salario competitivo" o la ausencia total de cifras deben devolver estrictamente null.
+
+REGLAS DE SALIDA:
+- Si "recommendation" es "skip", el PRIMER elemento de la lista "missing_requirements" debe explicar con claridad el motivo del descarte, citando el criterio incumplido (ejemplo: "Exige 10+ años de experiencia frente a los 3-4 del candidato", "Rol de Staff Engineer, nivel claramente superior al perfil del candidato", "Oferta de prácticas/Junior no compatible con el perfil", "Oferta como autónomo/freelance, no como empleado por cuenta ajena", "Rol de Product Manager sin ninguna mención a la formación/disciplina del candidato", "Puesto 100% centrado en rol no deseado por el candidato ({excluded_roles_summary})", "Requiere certificación/titulación obligatoria no presente en el perfil", "Exige idioma X con nivel nativo/fluido no acreditado en el perfil" o "Requiere presencialidad en ubicación no viable / sin autorización legal para trabajar").
+- NO uses "skip" por: gaps de experiencia de 3 años o menos, simples gaps de skills técnicas secundarias, requisitos "nice to have" que puedan aprenderse en el puesto, roles etiquetados como "Senior" cuando el candidato está razonablemente cerca de ese nivel, o roles de otra disciplina cuando la oferta SÍ menciona o valora explícitamente la formación/disciplina de origen del candidato — estos casos corresponden a "consider" o "apply".
+- Devuelve ÚNICAMENTE un JSON válido. No uses bloques de código markdown (```json), ni backticks, ni añadas texto introductorio ni explicativo fuera del JSON.
+
+ESQUEMA Y EJEMPLO DE FORMATO ESPERADO:
 {{
-  "score": numero_entre_0_y_100,
-  "salary": "rango o cifra salarial en texto si se indica, o null si no se especifica",
-  "pros": ["motivos concretos por los que el perfil encaja"],
-  "cons": ["motivos concretos por los que el perfil no encaja o riesgos"],
-  "missing_requirements": ["requisitos de la oferta que el perfil no cumple, empezando por el requisito duro excluyente si lo hay"],
-  "recommendation": "apply" | "consider" | "skip"
+  "score": 15,
+  "salary": "30.000 - 35.000 EUR",
+  "pros": ["La empresa utiliza metodologías ágiles", "Opción de trabajo remoto"],
+  "cons": ["El stack técnico principal difiere ligeramente de la experiencia reciente del candidato"],
+  "missing_requirements": [
+    "Rol de Staff Engineer, nivel claramente superior al perfil Mid-Senior del candidato.",
+    "Requiere certificación AWS Solutions Architect obligatoria"
+  ],
+  "recommendation": "skip"
 }}

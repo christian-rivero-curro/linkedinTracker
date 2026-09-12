@@ -7,6 +7,7 @@
     <span class="badge {{ detail.source }}">{{ detail.source }}</span>
     {% if detail.salary_raw %}<span class="badge" style="background:#ecfdf5;color:#047857;font-weight:600;">💰 {{ detail.salary_raw }}</span>{% endif %}
     {% if detail.recommendation == 'skip' %}<span class="badge" style="background:#fee2e2;color:#b91c1c;">no cumple requisitos</span>{% endif %}
+    {% if detail.status in ('applied', 'solicitada') %}<span class="badge" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;font-weight:600;">✓ Solicitada</span>{% endif %}
     {% if detail.status == 'discarded' %}<span class="badge" style="background:#e5e7eb;color:#374151;">descartada</span>{% endif %}
     {{ detail.location }} &middot; {{ detail.remote_type }}
   </p>
@@ -29,7 +30,21 @@
   <ul>{% for c in (detail.cons or []) %}<li>{{ c }}</li>{% endfor %}</ul>
   <h3>Requisitos que faltan</h3>
   <ul>{% for m in (detail.missing_requirements or []) %}<li>{{ m }}</li>{% endfor %}</ul>
-  <p><a href="{{ detail.apply_link }}" target="_blank">Ir a la oferta original &rarr;</a></p>
+  
+  <div style="display:flex;gap:0.6rem;align-items:center;margin:1.25rem 0;flex-wrap:wrap;">
+    {% if detail.status in ('applied', 'solicitada') %}
+      <button type="button" onclick="markAppliedDetail({{ detail.id }}, false)" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;border-radius:6px;padding:0.45rem 0.85rem;font-size:0.875rem;cursor:pointer;">Quitar solicitada</button>
+    {% elif detail.status != 'discarded' %}
+      <button type="button" onclick="markAppliedDetail({{ detail.id }}, true)" style="background:#2563eb;color:#ffffff;border:none;border-radius:6px;padding:0.45rem 0.85rem;font-size:0.875rem;font-weight:600;cursor:pointer;">✓ Marcar como solicitada</button>
+    {% endif %}
+
+    {% if detail.status != 'discarded' %}
+      <button type="button" onclick="discardJob({{ detail.id }})" style="background:#e5e7eb;color:#374151;border:none;border-radius:6px;padding:0.45rem 0.85rem;font-size:0.875rem;cursor:pointer;">Descartar oferta</button>
+    {% else %}
+      <button type="button" onclick="restoreJob({{ detail.id }})" style="background:#eef2ff;color:#3730a3;border:none;border-radius:6px;padding:0.45rem 0.85rem;font-size:0.875rem;cursor:pointer;">Restaurar oferta</button>
+    {% endif %}
+    <a href="{{ detail.apply_link }}" target="_blank" style="margin-left:auto;font-weight:600;">Ir a la oferta original &rarr;</a>
+  </div>
   <p><a href="/dashboard">&larr; Volver al dashboard</a></p>
 </div>
 {% else %}
@@ -64,16 +79,16 @@
     {% endif %}
   </p>
   <div class="filters">
-    <a href="/dashboard?status=all{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}" class="{{ 'active' if status == 'all' else '' }}">Todas</a>
-    <a href="/dashboard?status=new{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}" class="{{ 'active' if status == 'new' else '' }}">Nuevas</a>
-    <a href="/dashboard?status=viewed{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}" class="{{ 'active' if status == 'viewed' else '' }}">Vistas</a>
-    <a href="/dashboard?status=applied{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}" class="{{ 'active' if status == 'applied' else '' }}">Aplicadas</a>
-    <a href="/dashboard?status=discarded{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}" class="{{ 'active' if status == 'discarded' else '' }}">Descartadas</a>
+    <a href="/dashboard?status=all{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}{{ '&sort=' + sort if sort != 'recent' else '' }}" class="{{ 'active' if status == 'all' else '' }}">Todas</a>
+    <a href="/dashboard?status=new{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}{{ '&sort=' + sort if sort != 'recent' else '' }}" class="{{ 'active' if status == 'new' else '' }}">Nuevas</a>
+    <a href="/dashboard?status=viewed{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}{{ '&sort=' + sort if sort != 'recent' else '' }}" class="{{ 'active' if status == 'viewed' else '' }}">Vistas</a>
+    <a href="/dashboard?status=applied{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}{{ '&sort=' + sort if sort != 'recent' else '' }}" class="{{ 'active' if status in ('applied', 'solicitada') else '' }}">Solicitadas</a>
+    <a href="/dashboard?status=discarded{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}{{ '&sort=' + sort if sort != 'recent' else '' }}" class="{{ 'active' if status == 'discarded' else '' }}">Descartadas</a>
   </div>
   <div style="display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center;margin:0.85rem 0;">
     <p class="muted" style="margin:0;">
       Filtrar por variante:
-      <select onchange="location.href='/dashboard?status={{ status }}{{ '&show_skipped=1' if show_skipped else '' }}{{ '&show_discarded=1' if show_discarded else '' }}&source={{ source }}&variant_id=' + this.value">
+      <select onchange="location.href='/dashboard?status={{ status }}{{ '&show_skipped=1' if show_skipped else '' }}{{ '&show_discarded=1' if show_discarded else '' }}&source={{ source }}{{ '&sort=' + sort if sort != 'recent' else '' }}&variant_id=' + this.value">
         <option value="all" {{ 'selected' if variant_id == 'all' else '' }}>Todas las variantes</option>
         {% for v in variants %}
         <option value="{{ v.id }}" {{ 'selected' if variant_id == v.id|string else '' }}>{{ v.query_text }}</option>
@@ -82,7 +97,7 @@
     </p>
     <p class="muted" style="margin:0;">
       Filtrar por fuente:
-      <select onchange="location.href='/dashboard?status={{ status }}{{ '&show_skipped=1' if show_skipped else '' }}{{ '&show_discarded=1' if show_discarded else '' }}&variant_id={{ variant_id }}&source=' + this.value">
+      <select onchange="location.href='/dashboard?status={{ status }}{{ '&show_skipped=1' if show_skipped else '' }}{{ '&show_discarded=1' if show_discarded else '' }}&variant_id={{ variant_id }}{{ '&sort=' + sort if sort != 'recent' else '' }}&source=' + this.value">
         <option value="all" {{ 'selected' if source == 'all' else '' }}>Todas las fuentes</option>
         {% for src in available_sources %}
         <option value="{{ src.id }}" {{ 'selected' if source == src.id else '' }}>{{ src.name }}</option>
@@ -113,15 +128,15 @@
     <table class="sortable">
       <thead>
         <tr>
-          <th class="sortable" data-type="number">Score</th>
+          <th class="sortable {{ 'sort-desc' if sort == 'score' else '' }}" data-type="number">Score</th>
           <th class="sortable" data-type="text">Titulo</th>
           <th class="sortable" data-type="text">Empresa</th>
           <th class="sortable" data-type="text">Salario</th>
           <th class="sortable" data-type="text">Fuente</th>
           <th class="sortable" data-type="text">Ubicacion</th>
           <th class="sortable" data-type="text">Variante</th>
-          <th class="sortable" data-type="date">Publicada</th>
-          <th class="sortable" data-type="date">Anadida</th>
+          <th class="sortable {{ 'sort-desc' if sort == 'posted' else '' }}" data-type="date">Publicada</th>
+          <th class="sortable {{ 'sort-desc' if (sort or 'recent') == 'recent' else '' }}" data-type="date">Anadida</th>
           <th class="sortable" data-type="text">Estado</th>
           <th>Enlace</th>
           <th>Acciones</th>
@@ -158,13 +173,29 @@
           </td>
           <td data-value="{{ job.posted_at.isoformat() if job.posted_at else '' }}">{{ job.posted_at.strftime('%d/%m/%Y') if job.posted_at else '—' }}</td>
           <td data-value="{{ job.fetched_at.isoformat() if job.fetched_at else '' }}">{{ job.fetched_at.strftime('%d/%m/%Y %H:%M') if job.fetched_at else '—' }}</td>
-          <td>{{ job.status }}</td>
-          <td><a href="{{ job.apply_link }}" target="_blank">Ver &rarr;</a></td>
-          <td>
-            {% if job.status != 'discarded' %}
-              <button type="button" onclick="discardJob({{ job.id }})" style="background:#e5e7eb;color:#374151;border:none;border-radius:4px;padding:0.2rem 0.6rem;cursor:pointer;">Descartar</button>
+          <td id="job-status-cell-{{ job.id }}" data-value="{{ job.status }}">
+            {% if job.status in ('applied', 'solicitada') %}
+              <span class="badge" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;font-weight:600;">✓ Solicitada</span>
+            {% elif job.status == 'discarded' %}
+              <span class="badge" style="background:#fee2e2;color:#991b1b;">Descartada</span>
+            {% elif job.status == 'viewed' %}
+              <span class="badge" style="background:#f8fafc;color:#64748b;">Vista</span>
             {% else %}
-              <button type="button" onclick="restoreJob({{ job.id }})" style="background:#eef2ff;color:#3730a3;border:none;border-radius:4px;padding:0.2rem 0.6rem;cursor:pointer;">Restaurar</button>
+              <span class="badge" style="background:#f1f5f9;color:#475569;">Nueva</span>
+            {% endif %}
+          </td>
+          <td><a href="{{ job.apply_link }}" target="_blank">Ver &rarr;</a></td>
+          <td id="job-actions-cell-{{ job.id }}" style="white-space:nowrap;">
+            {% if job.status in ('applied', 'solicitada') %}
+              <button type="button" onclick="markApplied({{ job.id }}, false)" title="Desmarcar estado solicitada" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;border-radius:5px;padding:0.25rem 0.55rem;font-size:0.8rem;cursor:pointer;margin-right:0.3rem;">Quitar solicitada</button>
+            {% elif job.status != 'discarded' %}
+              <button type="button" onclick="markApplied({{ job.id }}, true)" title="Marcar como oferta solicitada/inscrita" style="background:#2563eb;color:#ffffff;border:none;border-radius:5px;padding:0.25rem 0.55rem;font-size:0.8rem;font-weight:600;cursor:pointer;margin-right:0.3rem;">✓ Solicitada</button>
+            {% endif %}
+
+            {% if job.status != 'discarded' %}
+              <button type="button" onclick="discardJob({{ job.id }})" style="background:#e5e7eb;color:#374151;border:none;border-radius:5px;padding:0.25rem 0.55rem;font-size:0.8rem;cursor:pointer;">Descartar</button>
+            {% else %}
+              <button type="button" onclick="restoreJob({{ job.id }})" style="background:#eef2ff;color:#3730a3;border:none;border-radius:5px;padding:0.25rem 0.55rem;font-size:0.8rem;cursor:pointer;">Restaurar</button>
             {% endif %}
           </td>
         </tr>
@@ -175,6 +206,58 @@
   {% if not jobs %}<p class="muted">Todavia no hay ofertas evaluadas (o todas estan filtradas/ocultas). El cron las ira anadiendo y evaluando cada 4 horas.</p>{% endif %}
 </div>
 <script>
+function markApplied(id, isApplied) {
+  const targetStatus = isApplied ? 'applied' : 'new';
+  fetch('/api/job/' + id + '/status', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({status: targetStatus, reason: null})
+  }).then(function(resp) {
+    if (resp.ok) {
+      const currentUrl = new URL(window.location.href);
+      const currentStatus = currentUrl.searchParams.get('status');
+      if (currentStatus && currentStatus !== 'all') {
+        location.reload();
+      } else {
+        const statusCell = document.getElementById('job-status-cell-' + id);
+        const actionsCell = document.getElementById('job-actions-cell-' + id);
+        if (statusCell) {
+          if (isApplied) {
+            statusCell.innerHTML = '<span class="badge" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;font-weight:600;">✓ Solicitada</span>';
+            statusCell.setAttribute('data-value', 'applied');
+          } else {
+            statusCell.innerHTML = '<span class="badge" style="background:#f1f5f9;color:#475569;">Nueva</span>';
+            statusCell.setAttribute('data-value', 'new');
+          }
+        }
+        if (actionsCell) {
+          const appliedBtnHtml = isApplied
+            ? '<button type="button" onclick="markApplied(' + id + ', false)" title="Desmarcar estado solicitada" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;border-radius:5px;padding:0.25rem 0.55rem;font-size:0.8rem;cursor:pointer;margin-right:0.3rem;">Quitar solicitada</button>'
+            : '<button type="button" onclick="markApplied(' + id + ', true)" title="Marcar como oferta solicitada/inscrita" style="background:#2563eb;color:#ffffff;border:none;border-radius:5px;padding:0.25rem 0.55rem;font-size:0.8rem;font-weight:600;cursor:pointer;margin-right:0.3rem;">✓ Solicitada</button>';
+          actionsCell.innerHTML = appliedBtnHtml + '<button type="button" onclick="discardJob(' + id + ')" style="background:#e5e7eb;color:#374151;border:none;border-radius:5px;padding:0.25rem 0.55rem;font-size:0.8rem;cursor:pointer;">Descartar</button>';
+        }
+      }
+    } else {
+      alert('No se pudo actualizar el estado de la oferta.');
+    }
+  });
+}
+
+function markAppliedDetail(id, isApplied) {
+  const targetStatus = isApplied ? 'applied' : 'new';
+  fetch('/api/job/' + id + '/status', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({status: targetStatus, reason: null})
+  }).then(function(resp) {
+    if (resp.ok) {
+      location.reload();
+    } else {
+      alert('No se pudo actualizar el estado de la oferta.');
+    }
+  });
+}
+
 function discardJob(id) {
   const reason = prompt('Motivo del descarte (opcional, deja vacio para descartar sin motivo):');
   if (reason === null) return;
@@ -185,7 +268,11 @@ function discardJob(id) {
   }).then(function(resp) {
     if (resp.ok) {
       const row = document.getElementById('job-row-' + id);
-      if (row) row.remove();
+      if (row) {
+        row.remove();
+      } else {
+        location.href = '/dashboard';
+      }
     } else {
       alert('No se pudo descartar la oferta.');
     }

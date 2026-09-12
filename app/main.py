@@ -581,6 +581,7 @@ def dashboard(
     show_discarded: str = "",
     variant_id: str = "all",
     source: str = "all",
+    sort: str = "recent",
     current_user: dict = Depends(get_current_user),
 ):
     show_skipped_bool = _parse_bool_param(show_skipped)
@@ -602,8 +603,11 @@ def dashboard(
     if not show_skipped_bool:
         query += " AND COALESCE(js.recommendation, 'consider') != 'skip'"
     if status != "all":
-        query += " AND js.status = :status"
-        params["status"] = status
+        if status in ("applied", "solicitada"):
+            query += " AND js.status IN ('applied', 'solicitada')"
+        else:
+            query += " AND js.status = :status"
+            params["status"] = status
     elif not show_discarded_bool:
         query += " AND js.status != 'discarded'"
     if variant_id != "all" and variant_id.strip().isdigit():
@@ -612,7 +616,13 @@ def dashboard(
     if source != "all" and source.strip():
         query += " AND jo.source = :source"
         params["source"] = source.strip().lower()
-    query += " ORDER BY js.final_score DESC LIMIT 100"
+
+    if sort == "score":
+        query += " ORDER BY js.final_score DESC, jo.fetched_at DESC NULLS LAST LIMIT 100"
+    elif sort == "posted":
+        query += " ORDER BY jo.posted_at DESC NULLS LAST, js.final_score DESC LIMIT 100"
+    else:  # default: 'recent' -> más recientes añadidas
+        query += " ORDER BY jo.fetched_at DESC NULLS LAST, js.id DESC LIMIT 100"
 
     with engine.connect() as conn:
         rows = conn.execute(text(query), params).mappings().all()
@@ -640,6 +650,7 @@ def dashboard(
             "variants": variants,
             "pending_llm_count": pending_llm_count,
             "source": source,
+            "sort": sort,
             "available_sources": get_all_sources_metadata(),
         },
     )
@@ -688,15 +699,19 @@ def clear_jobs(current_user: dict = Depends(get_current_user)):
 @app.post("/api/job/{job_score_id}/status")
 def update_job_status(job_score_id: int, payload: JobStatusUpdate, current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
-    discard_reason = payload.reason.strip() if (payload.status == "discarded" and payload.reason) else None
+    new_status = payload.status.strip().lower()
+    if new_status in ("solicitada", "solicitado"):
+        new_status = "applied"
+    discard_reason = payload.reason.strip() if (new_status == "discarded" and payload.reason) else None
     engine = get_engine()
     with engine.begin() as conn:
         result = conn.execute(
             text("UPDATE job_score SET status = :status, discard_reason = :discard_reason WHERE id = :id AND user_id = :uid"),
-            {"status": payload.status, "discard_reason": discard_reason, "id": job_score_id, "uid": user_id},
+            {"status": new_status, "discard_reason": discard_reason, "id": job_score_id, "uid": user_id},
         )
         if result.rowcount == 0:
             raise HTTPException(status_code=404, detail="Oferta no encontrada.")
+    return {"ok": True, "status": new_status}
 # ---------------------------------------------------------------------------
 # BÚSQUEDA BAJO DEMANDA POR USUARIO (BACKGROUND TASK)
 # ---------------------------------------------------------------------------

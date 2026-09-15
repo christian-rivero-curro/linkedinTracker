@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JobAutoFill - Configuración de Perfil de Empleo</title>
+  <link rel="stylesheet" href="options.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-logo">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
+            <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
+          </svg>
+        </div>
+        <div>
+          <h2>JobAutoFill</h2>
+          <span class="brand-tag">v1.0.0</span>
+        </div>
+      </div>
+
+      <nav class="nav-menu">
+        <button class="nav-item active" data-tab="tab-personal">
+          <span class="nav-icon">👤</span>
+          <span>Datos Personales</span>
+        </button>
+        <button class="nav-item" data-tab="tab-location">
+          <span class="nav-icon">📍</span>
+          <span>Ubicación</span>
+        </button>
+        <button class="nav-item" data-tab="tab-professional">
+          <span class="nav-icon">💼</span>
+          <span>Perfil Profesional</span>
+        </button>
+        <button class="nav-item" data-tab="tab-links">
+          <span class="nav-icon">🌐</span>
+          <span>Enlaces y Redes</span>
+        </button>
+        <button class="nav-item" data-tab="tab-cv">
+          <span class="nav-icon">📄</span>
+          <span>Currículum (CV)</span>
+        </button>
+        <button class="nav-item" data-tab="tab-questions">
+          <span class="nav-icon">📋</span>
+          <span>Preguntas Frecuentes</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="shortcut-tip">
+          <span class="key-badge">Alt</span> + <span class="key-badge">Shift</span> + <span class="key-badge">F</span>
+          <p>Atajo rápido para rellenar</p>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <header class="top-header">
+        <div>
+          <h1 id="page-title">Datos Personales</h1>
+          <p class="subtitle" id="page-subtitle">Configura tus nombres y datos de contacto directo</p>
+        </div>
+        <div class="header-actions">
+          <button id="btn-demo-data" class="btn btn-secondary" title="Cargar datos de prueba para probar rápido">
+            ⚡ Cargar Datos Demo
+          </button>
+          <button id="btn-export" class="btn btn-secondary" title="Exportar backup en JSON">
+            ⬇️ Exportar
+          </button>
+          <label class="btn btn-secondary" title="Restaurar backup desde JSON">
+            ⬆️ Importar
+            <input type="file" id="file-import" accept=".json" style="display: none;">
+          </label>
+          <button id="btn-save" class="btn btn-primary">
+            💾 Guardar Cambios
+          </button>
+        </div>
+      </header>
+
+      <form id="profile-form">
+        <!-- TAB 1: DATOS PERSONALES -->
+        <section class="tab-pane active" id="tab-personal">
+          <div class="card">
+            <h3 class="card-title">Identificación y Contacto</h3>
+            <div class="grid grid-2">
+              <div class="form-group">
+                <label for="first_name">Nombre <span class="req">*</span></label>
+                <input type="text" id="first_name" name="first_name" placeholder="Ej: Christian" class="form-control">
+              </div>
+              <div class="form-group">
+                <label for="last_name">Apellidos <span class="req">*</span></label>
+                <input type="text" id="last_name" name="last_name" placeholder="Ej: Rivero" class="form-control">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="full_name">Nombre Completo</label>
+              <div class="input-with-action">
+                <input type="text" id="full_name" name="full_name" placeholder="Ej: Christian Rivero" class="form-control">
+                <button type="button" id="btn-auto-fullname" class="btn-input-action" title="Generar a partir de Nombre y Apellidos">Autogenerar</button>
+              </div>
+              <small class="helper-text">Usado en portales que solo piden un campo único de "Full Name".</small>
+            </div>
+
+            <div class="grid grid-2">
+              <div class="form-group">
+                <label for="email">Correo Electrónico <span class="req">*</span></label>
+                <input type="email" id="email" name="email" placeholder="ejemplo@correo.com" class="form-control">
+              </div>
+              <div class="form-group">
+                <label for="phone">Teléfono Móvil <span class="req">*</span></label>
+                <div class="phone-input-group">
+                  <input type="text" id="phone_prefix" name="phone_prefix" placeholder="+34" class="form-control prefix-input" style="max-width: 90px;">
+                  <input type="tel" id="phone" name="phone" placeholder="612 345 678" class="form-control">
+                </div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="id_document">DNI / NIE / Pasaporte (Opcional)</label>
+              <input type="text" id="id_document" name="id_document" placeholder="12345678Z" class="form-control">
+              <small class="helper-text">Algunas plataformas en España (como InfoJobs o portales bancarios) lo solicitan.</small>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 2: UBICACIÓN -->
+        <section class="tab-pane" id="tab-location">
+          <div class="card">
+            <h3 class="card-title">Residencia y Dirección</h3>
+            
+            <div class="form-group">
+              <label for="address">Dirección / Calle / Línea 1</label>
+              <input type="text" id="address" name="address" placeholder="Calle Mayor 12, 3º B" class="form-control">
+            </div>
+
+            <div class="grid grid-2">
+              <div class="form-group">
+                <label for="city">Ciudad / Localidad</label>
+                <input type="text" id="city" name="city" placeholder="Madrid" class="form-control">
+              </div>
+              <div class="form-group">
+                <label for="postal_code">Código Postal</label>
+                <input type="text" id="postal_code" name="postal_code" placeholder="28001" class="form-control">
+              </div>
+            </div>
+
+            <div class="grid grid-2">
+              <div class="form-group">
+                <label for="state">Provincia / Región / Estado</label>
+                <input type="text" id="state" name="state" placeholder="Madrid" class="form-control">
+              </div>
+              <div class="form-group">
+                <label for="country">País</label>
+                <input type="text" id="country" name="country" placeholder="España" class="form-control">
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 3: PERFIL PROFESIONAL -->
+        <section class="tab-pane" id="tab-professional">
+          <div class="card">
+            <h3 class="card-title">Experiencia y Situación Laboral</h3>
+            
+            <div class="grid grid-2">
+              <div class="form-group">
+                <label for="current_role">Puesto / Título Actual</label>
+                <input type="text" id="current_role" name="current_role" placeholder="Senior Software Engineer" class="form-control">
+              </div>
+              <div class="form-group">
+                <label for="current_company">Empresa Actual</label>
+                <input type="text" id="current_company" name="current_company" placeholder="Acme Tech S.L." class="form-control">
+              </div>
+            </div>
+
+            <div class="grid grid-3">
+              <div class="form-group">
+                <label for="years_experience">Años de Experiencia</label>
+                <input type="number" id="years_experience" name="years_experience" placeholder="5" min="0" step="1" class="form-control">
+              </div>
+              <div class="form-group">
+                <label for="salary_expectation">Salario Deseado (€/año o brutos)</label>
+                <input type="text" id="salary_expectation" name="salary_expectation" placeholder="55000" class="form-control">
+              </div>
+              <div class="form-group">
+                <label for="notice_period">Periodo de Preaviso</label>
+                <input type="text" id="notice_period" name="notice_period" placeholder="15 días / Inmediato" class="form-control">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="work_modality">Modalidad Preferida</label>
+              <select id="work_modality" name="work_modality" class="form-control">
+                <option value="Remoto">100% Remoto</option>
+                <option value="Híbrido">Híbrido</option>
+                <option value="Presencial">Presencial</option>
+                <option value="Indiferente">Indiferente</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 4: ENLACES Y REDES -->
+        <section class="tab-pane" id="tab-links">
+          <div class="card">
+            <h3 class="card-title">Presencia Digital y Portafolio</h3>
+            
+            <div class="form-group">
+              <label for="linkedin">Perfil de LinkedIn <span class="req">*</span></label>
+              <input type="url" id="linkedin" name="linkedin" placeholder="https://www.linkedin.com/in/tu-perfil" class="form-control">
+            </div>
+
+            <div class="form-group">
+              <label for="github">Perfil de GitHub</label>
+              <input type="url" id="github" name="github" placeholder="https://github.com/tu-usuario" class="form-control">
+            </div>
+
+            <div class="form-group">
+              <label for="website">Web Personal / Portafolio</label>
+              <input type="url" id="website" name="website" placeholder="https://tuportafolio.dev" class="form-control">
+            </div>
+
+            <div class="form-group">
+              <label for="twitter">Twitter / X (Opcional)</label>
+              <input type="url" id="twitter" name="twitter" placeholder="https://x.com/tu-usuario" class="form-control">
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 5: CURRICULUM (CV) -->
+        <section class="tab-pane" id="tab-cv">
+          <div class="card">
+            <h3 class="card-title">Gestión de Curriculum Vitae</h3>
+            <p class="card-description">
+              Los navegadores web limitan el acceso directo al disco duro por seguridad. JobAutoFill te ofrece <strong>dos métodos complementarios</strong> para rellenar el CV de forma ultra-eficiente:
+            </p>
+
+            <div class="cv-section-block">
+              <div class="badge-tag">Método 1: Carga directa en extensión (Recomendado)</div>
+              <p class="helper-text mb-2">
+                Sube tu CV aquí una sola vez. Cuando visites una oferta, la extensión inyectará automáticamente el archivo en el selector con un solo clic.
+              </p>
+
+              <div class="cv-dropzone" id="cv-dropzone">
+                <input type="file" id="cv-file-input" accept=".pdf,.doc,.docx" style="display: none;">
+                <div class="dropzone-content" id="dropzone-empty">
+                  <span class="dropzone-icon">📁</span>
+                  <p class="dropzone-title">Haz clic o arrastra tu CV aquí (PDF, DOCX)</p>
+                  <span class="dropzone-subtitle">Se guarda localmente en el almacenamiento seguro de tu navegador</span>
+                </div>
+                <div class="dropzone-file-info hidden" id="dropzone-loaded">
+                  <div class="file-badge">
+                    <span class="file-icon">📄</span>
+                    <div>
+                      <strong id="cv-filename">CV_Christian_Rivero.pdf</strong>
+                      <span id="cv-filesize" class="file-size">145 KB</span>
+                    </div>
+                  </div>
+                  <button type="button" id="btn-remove-cv" class="btn btn-danger btn-sm">Eliminar CV</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="cv-section-block mt-4">
+              <div class="badge-tag secondary">Método 2: Ruta en tu ordenador para copiar rápido</div>
+              <p class="helper-text mb-2">
+                Escribe la ruta absoluta del archivo en tu PC. Si un portal abre la ventana nativa de archivos del sistema, podrás pulsar el botón <em>"Copiar Ruta"</em> del widget flotante para pegarla al instante sin navegar entre carpetas.
+              </p>
+
+              <div class="form-group">
+                <label for="cv_path">Ruta local del CV en tu PC</label>
+                <div class="input-with-action">
+                  <input type="text" id="cv_path" name="cv_path" placeholder="/Users/christian.rivero/Documents/CV_Christian.pdf o C:\Users\..." class="form-control">
+                  <button type="button" id="btn-copy-test" class="btn-input-action" title="Copiar al portapapeles">Copiar</button>
+                </div>
+                <small class="helper-text">Ejemplo Mac/Linux: <code>/Users/christian.rivero/Desktop/CV.pdf</code> | Windows: <code>C:\Users\Christian\Documents\CV.pdf</code></small>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 6: PREGUNTAS FRECUENTES -->
+        <section class="tab-pane" id="tab-questions">
+          <div class="card">
+            <h3 class="card-title">Preguntas Comunes de Reclutadores</h3>
+            
+            <div class="grid grid-2">
+              <div class="form-group">
+                <label for="work_authorization">¿Tienes permiso de trabajo / visado en el país?</label>
+                <select id="work_authorization" name="work_authorization" class="form-control">
+                  <option value="yes">Sí, tengo autorización completa</option>
+                  <option value="no">No, requiero visado</option>
+                  <option value="eu">Ciudadano de la Unión Europea</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="visa_sponsorship">¿Requieres patrocinio de visado ahora o en el futuro?</label>
+                <select id="visa_sponsorship" name="visa_sponsorship" class="form-control">
+                  <option value="no">No, no requiero patrocinio</option>
+                  <option value="yes">Sí, requiero patrocinio</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="grid grid-2">
+              <div class="form-group">
+                <label for="english_level">Nivel de Inglés</label>
+                <select id="english_level" name="english_level" class="form-control">
+                  <option value="Professional / Fluent (C1/C2)">Profesional / Fluido (C1 / C2)</option>
+                  <option value="Native / Bilingual">Nativo / Bilingüe</option>
+                  <option value="Intermediate (B2)">Intermedio Avanzado (B2)</option>
+                  <option value="Basic (B1)">Básico (B1)</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="disability">Discapacidad / Diversidad funcional</label>
+                <select id="disability" name="disability" class="form-control">
+                  <option value="no">No tengo ninguna discapacidad</option>
+                  <option value="prefer_not_say">Prefiero no responder</option>
+                  <option value="yes">Sí, tengo discapacidad reconocida</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="cover_letter">Carta de Presentación / Mensaje Resumen</label>
+              <textarea id="cover_letter" name="cover_letter" rows="5" class="form-control" placeholder="Escribe aquí un resumen profesional o introducción estándar..."></textarea>
+              <small class="helper-text">Se usará si el formulario contiene un campo abierto de 'Cover letter', 'Carta de motivación' o 'Comentarios adicionales'.</small>
+            </div>
+          </div>
+        </section>
+      </form>
+    </main>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="toast hidden">
+    <span id="toast-icon">✅</span>
+    <span id="toast-message">Datos guardados con éxito</span>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

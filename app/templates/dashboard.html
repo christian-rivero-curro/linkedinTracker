@@ -7,6 +7,7 @@
     <span class="badge {{ detail.source }}">{{ detail.source }}</span>
     {% if detail.salary_raw %}<span class="badge" style="background:#ecfdf5;color:#047857;font-weight:600;">💰 {{ detail.salary_raw }}</span>{% endif %}
     {% if detail.recommendation == 'skip' %}<span class="badge" style="background:#fee2e2;color:#b91c1c;">no cumple requisitos</span>{% endif %}
+    {% if detail.status in ('interview', 'entrevista') %}<span class="badge" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;font-weight:600;">📞 Entrevista</span>{% endif %}
     {% if detail.status in ('applied', 'solicitada') %}<span class="badge" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;font-weight:600;">✓ Solicitada</span>{% endif %}
     {% if detail.status == 'discarded' %}<span class="badge" style="background:#e5e7eb;color:#374151;">descartada</span>{% endif %}
     {{ detail.location }} &middot; {{ detail.remote_type }}
@@ -32,10 +33,15 @@
   <ul>{% for m in (detail.missing_requirements or []) %}<li>{{ m }}</li>{% endfor %}</ul>
   
   <div style="display:flex;gap:0.6rem;align-items:center;margin:1.25rem 0;flex-wrap:wrap;">
-    {% if detail.status in ('applied', 'solicitada') %}
-      <button type="button" onclick="markAppliedDetail({{ detail.id }}, false)" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;border-radius:6px;padding:0.45rem 0.85rem;font-size:0.875rem;cursor:pointer;">Quitar solicitada</button>
+    {% if detail.status in ('interview', 'entrevista') %}
+      <button type="button" onclick="setJobStatusDetail({{ detail.id }}, 'applied')" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:6px;padding:0.45rem 0.85rem;font-size:0.875rem;cursor:pointer;">↩ Volver a Solicitada</button>
+      <button type="button" onclick="setJobStatusDetail({{ detail.id }}, 'new')" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;border-radius:6px;padding:0.45rem 0.85rem;font-size:0.875rem;cursor:pointer;">Quitar estado</button>
+    {% elif detail.status in ('applied', 'solicitada') %}
+      <button type="button" onclick="setJobStatusDetail({{ detail.id }}, 'interview')" style="background:#f59e0b;color:#ffffff;border:none;border-radius:6px;padding:0.45rem 0.85rem;font-size:0.875rem;font-weight:600;cursor:pointer;">📞 Marcar Entrevista</button>
+      <button type="button" onclick="setJobStatusDetail({{ detail.id }}, 'new')" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;border-radius:6px;padding:0.45rem 0.85rem;font-size:0.875rem;cursor:pointer;">Quitar solicitada</button>
     {% elif detail.status != 'discarded' %}
-      <button type="button" onclick="markAppliedDetail({{ detail.id }}, true)" style="background:#2563eb;color:#ffffff;border:none;border-radius:6px;padding:0.45rem 0.85rem;font-size:0.875rem;font-weight:600;cursor:pointer;">✓ Marcar como solicitada</button>
+      <button type="button" onclick="setJobStatusDetail({{ detail.id }}, 'applied')" style="background:#2563eb;color:#ffffff;border:none;border-radius:6px;padding:0.45rem 0.85rem;font-size:0.875rem;font-weight:600;cursor:pointer;">✓ Marcar como solicitada</button>
+      <button type="button" onclick="setJobStatusDetail({{ detail.id }}, 'interview')" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:6px;padding:0.45rem 0.85rem;font-size:0.875rem;font-weight:600;cursor:pointer;">📞 Marcar Entrevista</button>
     {% endif %}
 
     {% if detail.status != 'discarded' %}
@@ -78,17 +84,19 @@
       Hay <strong>{{ pending_llm_count }}</strong> oferta{{ 's' if pending_llm_count != 1 else '' }} nueva{{ 's' if pending_llm_count != 1 else '' }} en cola de evaluacion; apareceran aqui en cuanto el cron las procese.
     {% endif %}
   </p>
+  {% set filter_params = ('&source=' + source if source != 'all' else '') + ('&variant_id=' + variant_id if variant_id != 'all' else '') + ('&sort=' + sort if sort != 'recent' else '') + ('&show_skipped=1' if show_skipped else '') + ('&show_discarded=1' if show_discarded else '') %}
   <div class="filters">
-    <a href="/dashboard?status=all{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}{{ '&sort=' + sort if sort != 'recent' else '' }}" class="{{ 'active' if status == 'all' else '' }}">Todas</a>
-    <a href="/dashboard?status=new{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}{{ '&sort=' + sort if sort != 'recent' else '' }}" class="{{ 'active' if status == 'new' else '' }}">Nuevas</a>
-    <a href="/dashboard?status=viewed{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}{{ '&sort=' + sort if sort != 'recent' else '' }}" class="{{ 'active' if status == 'viewed' else '' }}">Vistas</a>
-    <a href="/dashboard?status=applied{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}{{ '&sort=' + sort if sort != 'recent' else '' }}" class="{{ 'active' if status in ('applied', 'solicitada') else '' }}">Solicitadas</a>
-    <a href="/dashboard?status=discarded{{ '&source=' + source if source != 'all' else '' }}{{ '&variant_id=' + variant_id if variant_id != 'all' else '' }}{{ '&sort=' + sort if sort != 'recent' else '' }}" class="{{ 'active' if status == 'discarded' else '' }}">Descartadas</a>
+    <a href="/dashboard?status=all{{ filter_params }}" class="{{ 'active' if status == 'all' else '' }}">Todas</a>
+    <a href="/dashboard?status=new{{ filter_params }}" class="{{ 'active' if status == 'new' else '' }}">Nuevas</a>
+    <a href="/dashboard?status=viewed{{ filter_params }}" class="{{ 'active' if status == 'viewed' else '' }}">Vistas</a>
+    <a href="/dashboard?status=applied{{ filter_params }}" class="{{ 'active' if status in ('applied', 'solicitada') else '' }}">Solicitadas</a>
+    <a href="/dashboard?status=interview{{ filter_params }}" class="{{ 'active' if status in ('interview', 'entrevista') else '' }}">📞 Entrevistas</a>
+    <a href="/dashboard?status=discarded{{ filter_params }}" class="{{ 'active' if status == 'discarded' else '' }}">Descartadas</a>
   </div>
   <div style="display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center;margin:0.85rem 0;">
     <p class="muted" style="margin:0;">
       Filtrar por variante:
-      <select onchange="location.href='/dashboard?status={{ status }}{{ '&show_skipped=1' if show_skipped else '' }}{{ '&show_discarded=1' if show_discarded else '' }}&source={{ source }}{{ '&sort=' + sort if sort != 'recent' else '' }}&variant_id=' + this.value">
+      <select onchange="updateDashboardFilter('variant_id', this.value)">
         <option value="all" {{ 'selected' if variant_id == 'all' else '' }}>Todas las variantes</option>
         {% for v in variants %}
         <option value="{{ v.id }}" {{ 'selected' if variant_id == v.id|string else '' }}>{{ v.query_text }}</option>
@@ -97,7 +105,7 @@
     </p>
     <p class="muted" style="margin:0;">
       Filtrar por fuente:
-      <select onchange="location.href='/dashboard?status={{ status }}{{ '&show_skipped=1' if show_skipped else '' }}{{ '&show_discarded=1' if show_discarded else '' }}&variant_id={{ variant_id }}{{ '&sort=' + sort if sort != 'recent' else '' }}&source=' + this.value">
+      <select onchange="updateDashboardFilter('source', this.value)">
         <option value="all" {{ 'selected' if source == 'all' else '' }}>Todas las fuentes</option>
         {% for src in available_sources %}
         <option value="{{ src.id }}" {{ 'selected' if source == src.id else '' }}>{{ src.name }}</option>
@@ -106,24 +114,39 @@
     </p>
   </div>
   <p class="muted">
-    Solo se muestran ofertas que cumplen los requisitos duros de la descripcion (anios de experiencia, certificaciones, idioma...) segun la evaluacion del LLM.
+    Solo se muestran ofertas que cumplen los requisitos duros de la descripción según la evaluación del LLM.
     {% if show_skipped %}
-      <a href="/dashboard?status={{ status }}&variant_id={{ variant_id }}&source={{ source }}{{ '&show_discarded=1' if show_discarded else '' }}">Ocultar las que no cumplen requisitos</a>
+      <a href="javascript:void(0)" onclick="toggleDashboardParam('show_skipped')">Ocultar las que no cumplen requisitos</a>
     {% else %}
-      <a href="/dashboard?status={{ status }}&show_skipped=1&variant_id={{ variant_id }}&source={{ source }}{{ '&show_discarded=1' if show_discarded else '' }}">Ver tambien las que no cumplen requisitos (auditoria)</a>
+      <a href="javascript:void(0)" onclick="toggleDashboardParam('show_skipped')">Ver también las que no cumplen requisitos (auditoría)</a>
     {% endif %}
   </p>
-  {% if status == 'all' %}
+  {% if status in ('all', 'new') %}
   <p class="muted">
     Las ofertas descartadas se ocultan por defecto (no se borran).
     {% if show_discarded %}
-      <a href="/dashboard?status={{ status }}&variant_id={{ variant_id }}&source={{ source }}{{ '&show_skipped=1' if show_skipped else '' }}">Ocultar descartadas</a>
+      <a href="javascript:void(0)" onclick="toggleDashboardParam('show_discarded')">Ocultar descartadas</a>
     {% else %}
-      <a href="/dashboard?status={{ status }}&show_discarded=1&variant_id={{ variant_id }}&source={{ source }}{{ '&show_skipped=1' if show_skipped else '' }}">Ver tambien las descartadas</a>
+      <a href="javascript:void(0)" onclick="toggleDashboardParam('show_discarded')">Ver también las descartadas</a>
     {% endif %}
   </p>
   {% endif %}
-  <p class="muted">Haz clic en cualquier cabecera de columna para ordenar la tabla.</p>
+
+  <!-- Buscador en tiempo real sobre la tabla -->
+  <div style="display:flex;justify-content:space-between;align-items:center;margin:1rem 0 0.5rem 0;flex-wrap:wrap;gap:0.75rem;">
+    <div style="flex:1;min-width:280px;max-width:520px;">
+      <input
+        type="text"
+        id="table-live-filter"
+        placeholder="🔍 Filtrar en tiempo real por título, empresa, tech, ubicación..."
+        oninput="filterTableLive()"
+        style="width:100%;padding:0.45rem 0.8rem;border:1px solid #cbd5e1;border-radius:6px;font-size:0.85rem;background:#f8fafc;outline:none;"
+      >
+    </div>
+    <span id="table-filter-count" class="muted" style="font-size:0.82rem;">{{ jobs|length }} oferta{{ 's' if jobs|length != 1 else '' }}</span>
+  </div>
+
+  <p class="muted" style="margin-top:0.25rem;">Haz clic en cualquier cabecera de columna para ordenar la tabla.</p>
   <div class="table-wrap">
     <table class="sortable">
       <thead>
@@ -166,7 +189,7 @@
           <td>{{ job.location }} ({{ job.remote_type }})</td>
           <td data-value="{{ job.variant_query or '' }}" title="{{ job.variant_query or '' }}">
             {% if job.variant_query %}
-              <a href="/dashboard?status={{ status }}{{ '&show_skipped=1' if show_skipped else '' }}{{ '&show_discarded=1' if show_discarded else '' }}&variant_id={{ job.variant_id }}">{{ job.variant_query | truncate(28) }}</a>
+              <a href="javascript:void(0)" onclick="updateDashboardFilter('variant_id', '{{ job.variant_id }}')">{{ job.variant_query | truncate(28) }}</a>
             {% else %}
               <span class="muted">—</span>
             {% endif %}
@@ -174,7 +197,9 @@
           <td data-value="{{ job.posted_at.isoformat() if job.posted_at else '' }}">{{ job.posted_at.strftime('%d/%m/%Y') if job.posted_at else '—' }}</td>
           <td data-value="{{ job.fetched_at.isoformat() if job.fetched_at else '' }}">{{ job.fetched_at.strftime('%d/%m/%Y %H:%M') if job.fetched_at else '—' }}</td>
           <td id="job-status-cell-{{ job.id }}" data-value="{{ job.status }}">
-            {% if job.status in ('applied', 'solicitada') %}
+            {% if job.status in ('interview', 'entrevista') %}
+              <span class="badge" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;font-weight:600;">📞 Entrevista</span>
+            {% elif job.status in ('applied', 'solicitada') %}
               <span class="badge" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;font-weight:600;">✓ Solicitada</span>
             {% elif job.status == 'discarded' %}
               <span class="badge" style="background:#fee2e2;color:#991b1b;">Descartada</span>
@@ -186,16 +211,20 @@
           </td>
           <td><a href="{{ job.apply_link }}" target="_blank">Ver &rarr;</a></td>
           <td id="job-actions-cell-{{ job.id }}" style="white-space:nowrap;">
-            {% if job.status in ('applied', 'solicitada') %}
-              <button type="button" onclick="markApplied({{ job.id }}, false)" title="Desmarcar estado solicitada" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;border-radius:5px;padding:0.25rem 0.55rem;font-size:0.8rem;cursor:pointer;margin-right:0.3rem;">Quitar solicitada</button>
+            {% if job.status in ('interview', 'entrevista') %}
+              <button type="button" onclick="setJobStatus({{ job.id }}, 'applied')" title="Volver a estado Solicitada" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:5px;padding:0.25rem 0.5rem;font-size:0.8rem;cursor:pointer;margin-right:0.25rem;">↩ A Solicitada</button>
+            {% elif job.status in ('applied', 'solicitada') %}
+              <button type="button" onclick="setJobStatus({{ job.id }}, 'interview')" title="¡Me han llamado para entrevista!" style="background:#f59e0b;color:#ffffff;border:none;border-radius:5px;padding:0.25rem 0.5rem;font-size:0.8rem;font-weight:600;cursor:pointer;margin-right:0.25rem;">📞 Entrevista</button>
+              <button type="button" onclick="setJobStatus({{ job.id }}, 'new')" title="Desmarcar estado solicitada" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;border-radius:5px;padding:0.25rem 0.5rem;font-size:0.8rem;cursor:pointer;margin-right:0.25rem;">Quitar</button>
             {% elif job.status != 'discarded' %}
-              <button type="button" onclick="markApplied({{ job.id }}, true)" title="Marcar como oferta solicitada/inscrita" style="background:#2563eb;color:#ffffff;border:none;border-radius:5px;padding:0.25rem 0.55rem;font-size:0.8rem;font-weight:600;cursor:pointer;margin-right:0.3rem;">✓ Solicitada</button>
+              <button type="button" onclick="setJobStatus({{ job.id }}, 'applied')" title="Marcar como oferta solicitada/inscrita" style="background:#2563eb;color:#ffffff;border:none;border-radius:5px;padding:0.25rem 0.5rem;font-size:0.8rem;font-weight:600;cursor:pointer;margin-right:0.25rem;">✓ Solicitada</button>
+              <button type="button" onclick="setJobStatus({{ job.id }}, 'interview')" title="Marcar directamente para entrevista" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:5px;padding:0.25rem 0.5rem;font-size:0.8rem;font-weight:600;cursor:pointer;margin-right:0.25rem;">📞 Entrevista</button>
             {% endif %}
 
             {% if job.status != 'discarded' %}
-              <button type="button" onclick="discardJob({{ job.id }})" style="background:#e5e7eb;color:#374151;border:none;border-radius:5px;padding:0.25rem 0.55rem;font-size:0.8rem;cursor:pointer;">Descartar</button>
+              <button type="button" onclick="discardJob({{ job.id }})" style="background:#e5e7eb;color:#374151;border:none;border-radius:5px;padding:0.25rem 0.5rem;font-size:0.8rem;cursor:pointer;">Descartar</button>
             {% else %}
-              <button type="button" onclick="restoreJob({{ job.id }})" style="background:#eef2ff;color:#3730a3;border:none;border-radius:5px;padding:0.25rem 0.55rem;font-size:0.8rem;cursor:pointer;">Restaurar</button>
+              <button type="button" onclick="restoreJob({{ job.id }})" style="background:#eef2ff;color:#3730a3;border:none;border-radius:5px;padding:0.25rem 0.5rem;font-size:0.8rem;cursor:pointer;">Restaurar</button>
             {% endif %}
           </td>
         </tr>
@@ -206,8 +235,45 @@
   {% if not jobs %}<p class="muted">Todavia no hay ofertas evaluadas (o todas estan filtradas/ocultas). El cron las ira anadiendo y evaluando cada 4 horas.</p>{% endif %}
 </div>
 <script>
-function markApplied(id, isApplied) {
-  const targetStatus = isApplied ? 'applied' : 'new';
+function updateDashboardFilter(param, value) {
+  const url = new URL(window.location.href);
+  if (value === 'all' || !value) {
+    url.searchParams.delete(param);
+  } else {
+    url.searchParams.set(param, value);
+  }
+  window.location.href = url.toString();
+}
+
+function toggleDashboardParam(param) {
+  const url = new URL(window.location.href);
+  if (url.searchParams.get(param)) {
+    url.searchParams.delete(param);
+  } else {
+    url.searchParams.set(param, '1');
+  }
+  window.location.href = url.toString();
+}
+
+function filterTableLive() {
+  const input = document.getElementById('table-live-filter');
+  if (!input) return;
+  const q = input.value.toLowerCase().trim();
+  const rows = document.querySelectorAll('table.sortable tbody tr');
+  let visible = 0;
+  rows.forEach(function(row) {
+    const text = row.textContent.toLowerCase();
+    const match = !q || text.includes(q);
+    row.style.display = match ? '' : 'none';
+    if (match) visible++;
+  });
+  const countEl = document.getElementById('table-filter-count');
+  if (countEl) {
+    countEl.innerText = visible + ' oferta' + (visible !== 1 ? 's' : '');
+  }
+}
+
+function setJobStatus(id, targetStatus) {
   fetch('/api/job/' + id + '/status', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -222,7 +288,10 @@ function markApplied(id, isApplied) {
         const statusCell = document.getElementById('job-status-cell-' + id);
         const actionsCell = document.getElementById('job-actions-cell-' + id);
         if (statusCell) {
-          if (isApplied) {
+          if (targetStatus === 'interview') {
+            statusCell.innerHTML = '<span class="badge" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;font-weight:600;">📞 Entrevista</span>';
+            statusCell.setAttribute('data-value', 'interview');
+          } else if (targetStatus === 'applied') {
             statusCell.innerHTML = '<span class="badge" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;font-weight:600;">✓ Solicitada</span>';
             statusCell.setAttribute('data-value', 'applied');
           } else {
@@ -231,10 +300,17 @@ function markApplied(id, isApplied) {
           }
         }
         if (actionsCell) {
-          const appliedBtnHtml = isApplied
-            ? '<button type="button" onclick="markApplied(' + id + ', false)" title="Desmarcar estado solicitada" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;border-radius:5px;padding:0.25rem 0.55rem;font-size:0.8rem;cursor:pointer;margin-right:0.3rem;">Quitar solicitada</button>'
-            : '<button type="button" onclick="markApplied(' + id + ', true)" title="Marcar como oferta solicitada/inscrita" style="background:#2563eb;color:#ffffff;border:none;border-radius:5px;padding:0.25rem 0.55rem;font-size:0.8rem;font-weight:600;cursor:pointer;margin-right:0.3rem;">✓ Solicitada</button>';
-          actionsCell.innerHTML = appliedBtnHtml + '<button type="button" onclick="discardJob(' + id + ')" style="background:#e5e7eb;color:#374151;border:none;border-radius:5px;padding:0.25rem 0.55rem;font-size:0.8rem;cursor:pointer;">Descartar</button>';
+          let buttonsHtml = '';
+          if (targetStatus === 'interview') {
+            buttonsHtml = '<button type="button" onclick="setJobStatus(' + id + ', \'applied\')" title="Volver a estado Solicitada" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:5px;padding:0.25rem 0.5rem;font-size:0.8rem;cursor:pointer;margin-right:0.25rem;">↩ A Solicitada</button>';
+          } else if (targetStatus === 'applied') {
+            buttonsHtml = '<button type="button" onclick="setJobStatus(' + id + ', \'interview\')" title="¡Me han llamado para entrevista!" style="background:#f59e0b;color:#ffffff;border:none;border-radius:5px;padding:0.25rem 0.5rem;font-size:0.8rem;font-weight:600;cursor:pointer;margin-right:0.25rem;">📞 Entrevista</button>' +
+                          '<button type="button" onclick="setJobStatus(' + id + ', \'new\')" title="Desmarcar estado solicitada" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;border-radius:5px;padding:0.25rem 0.5rem;font-size:0.8rem;cursor:pointer;margin-right:0.25rem;">Quitar</button>';
+          } else {
+            buttonsHtml = '<button type="button" onclick="setJobStatus(' + id + ', \'applied\')" title="Marcar como oferta solicitada/inscrita" style="background:#2563eb;color:#ffffff;border:none;border-radius:5px;padding:0.25rem 0.5rem;font-size:0.8rem;font-weight:600;cursor:pointer;margin-right:0.25rem;">✓ Solicitada</button>' +
+                          '<button type="button" onclick="setJobStatus(' + id + ', \'interview\')" title="Marcar directamente para entrevista" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:5px;padding:0.25rem 0.5rem;font-size:0.8rem;font-weight:600;cursor:pointer;margin-right:0.25rem;">📞 Entrevista</button>';
+          }
+          actionsCell.innerHTML = buttonsHtml + '<button type="button" onclick="discardJob(' + id + ')" style="background:#e5e7eb;color:#374151;border:none;border-radius:5px;padding:0.25rem 0.5rem;font-size:0.8rem;cursor:pointer;">Descartar</button>';
         }
       }
     } else {
@@ -243,8 +319,7 @@ function markApplied(id, isApplied) {
   });
 }
 
-function markAppliedDetail(id, isApplied) {
-  const targetStatus = isApplied ? 'applied' : 'new';
+function setJobStatusDetail(id, targetStatus) {
   fetch('/api/job/' + id + '/status', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -256,6 +331,14 @@ function markAppliedDetail(id, isApplied) {
       alert('No se pudo actualizar el estado de la oferta.');
     }
   });
+}
+
+function markApplied(id, isApplied) {
+  setJobStatus(id, isApplied ? 'applied' : 'new');
+}
+
+function markAppliedDetail(id, isApplied) {
+  setJobStatusDetail(id, isApplied ? 'applied' : 'new');
 }
 
 function discardJob(id) {

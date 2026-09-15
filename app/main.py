@@ -600,16 +600,28 @@ def dashboard(
         WHERE js.user_id = :user_id AND js.llm_evaluated = TRUE
     """
     params = {"user_id": user_id}
-    if not show_skipped_bool:
+    # 1. Filtro de requisitos duros / descartes del LLM ('skip'):
+    # No ocultar 'skip' si estamos viendo expresamente "Descartadas", "Solicitadas" o "Entrevistas", o si el usuario pide verlas
+    if not show_skipped_bool and status not in ("discarded", "applied", "solicitada", "interview", "entrevista"):
         query += " AND COALESCE(js.recommendation, 'consider') != 'skip'"
-    if status != "all":
-        if status in ("applied", "solicitada"):
-            query += " AND js.status IN ('applied', 'solicitada')"
-        else:
-            query += " AND js.status = :status"
-            params["status"] = status
-    elif not show_discarded_bool:
-        query += " AND js.status != 'discarded'"
+
+    # 2. Filtro por estado del pipeline / usuario:
+    if status == "discarded":
+        # En 'Descartadas' deben aparecer las descartadas manualmente (status='discarded')
+        # o descartadas automáticamente por la IA (recommendation='skip')
+        query += " AND (js.status = 'discarded' OR js.recommendation = 'skip')"
+    elif status in ("interview", "entrevista"):
+        query += " AND js.status IN ('interview', 'entrevista')"
+    elif status in ("applied", "solicitada"):
+        query += " AND js.status IN ('applied', 'solicitada')"
+    elif status == "viewed":
+        query += " AND js.status = 'viewed'"
+    elif status == "new":
+        query += " AND js.status = 'new' AND js.status != 'discarded'"
+    elif status == "all":
+        if not show_discarded_bool:
+            query += " AND js.status != 'discarded'"
+
     if variant_id != "all" and variant_id.strip().isdigit():
         query += " AND jo.variant_id = :variant_id"
         params["variant_id"] = int(variant_id)
@@ -660,6 +672,15 @@ def dashboard(
 def dashboard_detail(request: Request, job_score_id: int, current_user: dict = Depends(get_current_user)):
     engine = get_engine()
     user_id = current_user["id"]
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("UPDATE job_score SET status = 'viewed' WHERE id = :id AND user_id = :uid AND status = 'new'"),
+                {"id": job_score_id, "uid": user_id},
+            )
+    except Exception as e:
+        print(f"[dashboard_detail] Error marcando oferta como vista: {e}")
+
     with engine.connect() as conn:
         row = conn.execute(
             text("""
@@ -702,6 +723,8 @@ def update_job_status(job_score_id: int, payload: JobStatusUpdate, current_user:
     new_status = payload.status.strip().lower()
     if new_status in ("solicitada", "solicitado"):
         new_status = "applied"
+    elif new_status in ("entrevista", "interview"):
+        new_status = "interview"
     discard_reason = payload.reason.strip() if (new_status == "discarded" and payload.reason) else None
     engine = get_engine()
     with engine.begin() as conn:

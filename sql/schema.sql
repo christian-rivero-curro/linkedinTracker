@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS job_score (
     cons TEXT[],
     missing_requirements TEXT[],
     final_score FLOAT NOT NULL,
-    status TEXT DEFAULT 'new' CHECK (status IN ('new','viewed','applied','discarded')),
+    status TEXT DEFAULT 'new' CHECK (status IN ('new','viewed','applied','interview','discarded')),
     created_at TIMESTAMPTZ DEFAULT now(),
     UNIQUE(job_offer_id, profile_id)
 );

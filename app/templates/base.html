@@ -184,13 +184,17 @@
               var bv = bCell.hasAttribute("data-value") ? bCell.getAttribute("data-value") : bCell.textContent.trim();
 
               if (type === "number") {
-                av = parseFloat(av) || 0;
-                bv = parseFloat(bv) || 0;
+                av = parseFloat(av);
+                bv = parseFloat(bv);
+                if (isNaN(av)) av = 0;
+                if (isNaN(bv)) bv = 0;
                 return nextDir === "asc" ? av - bv : bv - av;
               }
               if (type === "date") {
                 av = av ? new Date(av).getTime() : 0;
                 bv = bv ? new Date(bv).getTime() : 0;
+                if (isNaN(av)) av = 0;
+                if (isNaN(bv)) bv = 0;
                 return nextDir === "asc" ? av - bv : bv - av;
               }
               av = String(av).toLowerCase();

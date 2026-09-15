@@ -35,8 +35,8 @@ linkedinTracker/
 1. Crea un proyecto en Supabase, habilita la extension vector y ejecuta sql/schema.sql.
 2. Crea cuenta en OpenRouter, genera API key, elige modelo :free vigente.
 3. Copia .env.example a .env y rellena variables.
-4. pip install -r requirements.txt
-5. python app/main.py y abre /onboarding para subir tu CV.
+4. pip install -r requirements.txt (o ejecuta ./start.sh directamente)
+5. ./start.sh (o python app/main.py) y abre /onboarding para subir tu CV.
 6. python pipeline/run_linkedin_guest.py para probar el scraper.
 7. Configura Secrets/Variables en GitHub Actions.
 8. Despliega el portal en Render (build: pip install -r requirements.txt; start: uvicorn app.main:app --host 0.0.0.0 --port $PORT).

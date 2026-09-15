@@ -20,3 +20,10 @@ class DiscoveryTriggerRequest(BaseModel):
 class JobStatusUpdate(BaseModel):
     status: str
     reason: Optional[str] = None
+
+
+class BatchJobStatusUpdate(BaseModel):
+    job_ids: list[int]
+    status: str
+    reason: Optional[str] = None
+

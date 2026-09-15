@@ -4,6 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from fastapi import FastAPI, Request, Form, Depends, HTTPException, status, BackgroundTasks
 from fastapi.responses import RedirectResponse, JSONResponse
@@ -13,7 +14,7 @@ from sqlalchemy import text
 from dotenv import load_dotenv
 
 from app.db import get_engine
-from app.schemas import JobStatusUpdate
+from app.schemas import JobStatusUpdate, BatchJobStatusUpdate
 from app.auth import (
     get_current_user,
     get_current_user_optional,
@@ -31,24 +32,66 @@ from pipeline.scrapers.registry import get_all_sources_metadata
 
 load_dotenv()
 
-app = FastAPI(title="linkedinTracker")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Inicialización de BD y migraciones en el arranque
+    migration_statements = [
+        "ALTER TABLE profile ALTER COLUMN embedding DROP NOT NULL;",
+        "ALTER TABLE profile ADD COLUMN IF NOT EXISTS enabled_sources TEXT[] DEFAULT '{\"linkedin\"}';",
+        "UPDATE profile SET enabled_sources = '{\"linkedin\"}' WHERE enabled_sources IS NULL OR array_length(enabled_sources, 1) IS NULL;",
+        "ALTER TABLE profile ADD COLUMN IF NOT EXISTS excluded_roles TEXT[] DEFAULT '{}';",
+        "ALTER TABLE profile ADD COLUMN IF NOT EXISTS excluded_keywords TEXT[] DEFAULT '{}';",
+        "ALTER TABLE job_score DROP CONSTRAINT IF EXISTS job_score_status_check;",
+        "ALTER TABLE job_score DROP CONSTRAINT IF EXISTS job_score_status_check1;",
+        """
+        DO $$
+        DECLARE
+            r RECORD;
+        BEGIN
+            FOR r IN (
+                SELECT conname
+                FROM pg_constraint c
+                JOIN pg_class t ON c.conrelid = t.oid
+                WHERE t.relname = 'job_score' AND c.contype = 'c'
+            ) LOOP
+                EXECUTE 'ALTER TABLE job_score DROP CONSTRAINT IF EXISTS ' || quote_ident(r.conname);
+            END LOOP;
+        END $$;
+        """,
+        "ALTER TABLE job_score ADD CONSTRAINT job_score_status_check CHECK (status IN ('new', 'viewed', 'applied', 'solicitada', 'interview', 'entrevista', 'discarded'));",
+    ]
+    try:
+        engine = get_engine()
+        # Verificar conexión previa para no spamear errores si la BD está pausada o inaccesible
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1;"))
+
+        for stmt in migration_statements:
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(stmt))
+            except Exception as item_err:
+                print(f"[startup] Info migración ({stmt.strip()[:35]}...): {item_err}")
+    except Exception as e:
+        err_text = str(e)
+        if "tenant" in err_text.lower() or "not found" in err_text.lower():
+            print("\n" + "=" * 78)
+            print("[startup] ⚠️  AVISO DE CONEXIÓN A SUPABASE:")
+            print("No se encontró el tenant/proyecto en Supabase (ENOTFOUND).")
+            print("Causa más habitual: Tu proyecto gratuito de Supabase se ha pausado por inactividad.")
+            print("👉 Solución: Entra en https://supabase.com/dashboard y haz clic en 'Restore project'.")
+            print("=" * 78 + "\n")
+        else:
+            print(f"[startup] Aviso conexión BD: {e}")
+    yield
+
+
+app = FastAPI(title="linkedinTracker", lifespan=lifespan)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
-
-@app.on_event("startup")
-def startup_db_migrations():
-    try:
-        engine = get_engine()
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE profile ALTER COLUMN embedding DROP NOT NULL;"))
-            conn.execute(text("ALTER TABLE profile ADD COLUMN IF NOT EXISTS enabled_sources TEXT[] DEFAULT '{\"linkedin\"}';"))
-            conn.execute(text("UPDATE profile SET enabled_sources = '{\"linkedin\"}' WHERE enabled_sources IS NULL OR array_length(enabled_sources, 1) IS NULL;"))
-            conn.execute(text("ALTER TABLE profile ADD COLUMN IF NOT EXISTS excluded_roles TEXT[] DEFAULT '{}';"))
-            conn.execute(text("ALTER TABLE profile ADD COLUMN IF NOT EXISTS excluded_keywords TEXT[] DEFAULT '{}';"))
-    except Exception as e:
-        print(f"[startup] Info migraciones BD: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -642,6 +685,22 @@ def dashboard(
             text("SELECT COUNT(*) FROM job_score WHERE user_id = :uid AND llm_evaluated = FALSE"),
             {"uid": user_id},
         ).scalar()
+        status_counts_row = conn.execute(
+            text("""
+                SELECT 
+                    COUNT(*) FILTER (WHERE status != 'discarded' AND COALESCE(recommendation, 'consider') != 'skip') AS total_active,
+                    COUNT(*) FILTER (WHERE status IN ('interview', 'entrevista')) AS interview_count,
+                    COUNT(*) FILTER (WHERE status IN ('applied', 'solicitada')) AS applied_count,
+                    COUNT(*) FILTER (WHERE status = 'new' AND COALESCE(recommendation, 'consider') != 'skip') AS new_count,
+                    COUNT(*) FILTER (WHERE status = 'viewed' AND COALESCE(recommendation, 'consider') != 'skip') AS viewed_count,
+                    COUNT(*) FILTER (WHERE status = 'discarded' OR recommendation = 'skip') AS discarded_count,
+                    COUNT(*) AS total_all
+                FROM job_score
+                WHERE user_id = :uid AND llm_evaluated = TRUE
+            """),
+            {"uid": user_id},
+        ).mappings().first()
+        status_counts = dict(status_counts_row) if status_counts_row else {}
 
     try:
         variants = get_all_variants(engine, user_id=user_id)
@@ -661,11 +720,13 @@ def dashboard(
             "variant_id": variant_id,
             "variants": variants,
             "pending_llm_count": pending_llm_count,
+            "status_counts": status_counts,
             "source": source,
             "sort": sort,
             "available_sources": get_all_sources_metadata(),
         },
     )
+
 
 
 @app.get("/dashboard/{job_score_id}")
@@ -725,16 +786,113 @@ def update_job_status(job_score_id: int, payload: JobStatusUpdate, current_user:
         new_status = "applied"
     elif new_status in ("entrevista", "interview"):
         new_status = "interview"
+    elif new_status in ("nueva", "new"):
+        new_status = "new"
+    elif new_status in ("vista", "viewed"):
+        new_status = "viewed"
+    elif new_status in ("descartada", "discarded"):
+        new_status = "discarded"
+
     discard_reason = payload.reason.strip() if (new_status == "discarded" and payload.reason) else None
     engine = get_engine()
-    with engine.begin() as conn:
-        result = conn.execute(
-            text("UPDATE job_score SET status = :status, discard_reason = :discard_reason WHERE id = :id AND user_id = :uid"),
-            {"status": new_status, "discard_reason": discard_reason, "id": job_score_id, "uid": user_id},
-        )
-        if result.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Oferta no encontrada.")
+
+    def _execute_update():
+        with engine.begin() as conn:
+            result = conn.execute(
+                text("UPDATE job_score SET status = :status, discard_reason = :discard_reason WHERE id = :id AND user_id = :uid"),
+                {"status": new_status, "discard_reason": discard_reason, "id": job_score_id, "uid": user_id},
+            )
+            if result.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Oferta no encontrada.")
+
+    try:
+        _execute_update()
+    except HTTPException:
+        raise
+    except Exception as e:
+        err_str = str(e).lower()
+        if "check" in err_str or "constraint" in err_str or "violat" in err_str:
+            print(f"[update_job_status] Constraint violation detectada, liberando constraints en job_score: {e}")
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE job_score DROP CONSTRAINT IF EXISTS job_score_status_check;"))
+                    conn.execute(text("ALTER TABLE job_score DROP CONSTRAINT IF EXISTS job_score_status_check1;"))
+                    conn.execute(text("""
+                        DO $$
+                        DECLARE
+                            r RECORD;
+                        BEGIN
+                            FOR r IN (
+                                SELECT conname
+                                FROM pg_constraint c
+                                JOIN pg_class t ON c.conrelid = t.oid
+                                WHERE t.relname = 'job_score' AND c.contype = 'c'
+                            ) LOOP
+                                EXECUTE 'ALTER TABLE job_score DROP CONSTRAINT IF EXISTS ' || quote_ident(r.conname);
+                            END LOOP;
+                        END $$;
+                    """))
+                _execute_update()
+            except HTTPException:
+                raise
+            except Exception as retry_err:
+                print(f"[update_job_status] Error tras reintento de actualización: {retry_err}")
+                raise HTTPException(status_code=500, detail=f"No se pudo actualizar el estado: {retry_err}")
+        else:
+            print(f"[update_job_status] Error actualizando estado de oferta: {e}")
+            raise HTTPException(status_code=500, detail=f"No se pudo actualizar el estado: {e}")
+
     return {"ok": True, "status": new_status}
+
+
+@app.post("/api/jobs/batch-status")
+def batch_update_job_status(payload: BatchJobStatusUpdate, current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+    if not payload.job_ids:
+        return {"ok": True, "updated": 0}
+    new_status = payload.status.strip().lower()
+    if new_status in ("solicitada", "solicitado"):
+        new_status = "applied"
+    elif new_status in ("entrevista", "interview"):
+        new_status = "interview"
+    elif new_status in ("nueva", "new"):
+        new_status = "new"
+    elif new_status in ("vista", "viewed"):
+        new_status = "viewed"
+    elif new_status in ("descartada", "discarded"):
+        new_status = "discarded"
+
+    discard_reason = payload.reason.strip() if (new_status == "discarded" and payload.reason) else None
+    engine = get_engine()
+
+    def _execute_batch():
+        with engine.begin() as conn:
+            result = conn.execute(
+                text("""
+                    UPDATE job_score 
+                    SET status = :status, discard_reason = :discard_reason 
+                    WHERE id = ANY(:ids) AND user_id = :uid
+                """),
+                {"status": new_status, "discard_reason": discard_reason, "ids": payload.job_ids, "uid": user_id},
+            )
+            return result.rowcount
+
+    try:
+        updated_count = _execute_batch()
+    except Exception as e:
+        err_str = str(e).lower()
+        if "check" in err_str or "constraint" in err_str or "violat" in err_str:
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE job_score DROP CONSTRAINT IF EXISTS job_score_status_check;"))
+                    conn.execute(text("ALTER TABLE job_score DROP CONSTRAINT IF EXISTS job_score_status_check1;"))
+                updated_count = _execute_batch()
+            except Exception as retry_err:
+                raise HTTPException(status_code=500, detail=f"Error en actualización masiva: {retry_err}")
+        else:
+            raise HTTPException(status_code=500, detail=f"Error en actualización masiva: {e}")
+
+    return {"ok": True, "status": new_status, "updated": updated_count}
 # ---------------------------------------------------------------------------
 # BÚSQUEDA BAJO DEMANDA POR USUARIO (BACKGROUND TASK)
 # ---------------------------------------------------------------------------

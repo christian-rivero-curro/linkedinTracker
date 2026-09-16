@@ -1,843 +1,821 @@
 {% extends "base.html" %}
 {% block content %}
-{% if detail %}
-<div class="card">
-  <h1>{{ detail.title }} &mdash; {{ detail.company }}</h1>
-  <p>
-    <span class="badge {{ detail.source }}">{{ detail.source }}</span>
-    {% if detail.salary_raw %}<span class="badge" style="background:#ecfdf5;color:#047857;font-weight:600;">💰 {{ detail.salary_raw }}</span>{% endif %}
-    {% if detail.recommendation == 'skip' %}<span class="badge" style="background:#fee2e2;color:#b91c1c;">no cumple requisitos</span>{% endif %}
-    {% if detail.status in ('interview', 'entrevista') %}<span class="badge" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;font-weight:600;">📞 Entrevista</span>{% endif %}
-    {% if detail.status in ('applied', 'solicitada') %}<span class="badge" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;font-weight:600;">✓ Solicitada</span>{% endif %}
-    {% if detail.status == 'discarded' %}<span class="badge" style="background:#e5e7eb;color:#374151;">descartada</span>{% endif %}
-    {{ detail.location }} &middot; {{ detail.remote_type }}
-  </p>
-  <p class="muted">
-    Publicada: {{ detail.posted_at.strftime('%d/%m/%Y') if detail.posted_at else 'desconocida' }}
-    &middot; Anadida al sistema: {{ detail.fetched_at.strftime('%d/%m/%Y %H:%M') if detail.fetched_at else '—' }}
-    &middot; Variante de busqueda: {{ detail.variant_query if detail.variant_query else '—' }}
-  </p>
-  {% if detail.status == 'discarded' and detail.discard_reason %}
-  <p class="muted"><strong>Motivo del descarte:</strong> {{ detail.discard_reason }}</p>
-  {% endif %}
-  <p>
-    {% set s = detail.final_score %}
-    <span class="score-pill {{ 'score-high' if s >= 75 else ('score-mid' if s >= 50 else 'score-low') }}">{{ s | round(1) }}</span>
-    (LLM: {{ detail.llm_score if detail.llm_score is not none else 'pendiente' }})
-  </p>
-  <h3>Pros</h3>
-  <ul>{% for p in (detail.pros or []) %}<li>{{ p }}</li>{% endfor %}</ul>
-  <h3>Contras</h3>
-  <ul>{% for c in (detail.cons or []) %}<li>{{ c }}</li>{% endfor %}</ul>
-  <h3>Requisitos que faltan</h3>
-  <ul>{% for m in (detail.missing_requirements or []) %}<li>{{ m }}</li>{% endfor %}</ul>
-  
-  <div style="display:flex;gap:0.6rem;align-items:center;margin:1.25rem 0;flex-wrap:wrap;">
-    {% if detail.status in ('interview', 'entrevista') %}
-      <button type="button" class="action-btn action-btn-secondary" onclick="setJobStatusDetail({{ detail.id }}, 'applied')">↩ Volver a Solicitada</button>
-      <button type="button" class="action-btn action-btn-secondary" onclick="setJobStatusDetail({{ detail.id }}, 'new')">Quitar estado</button>
-    {% elif detail.status in ('applied', 'solicitada') %}
-      <button type="button" class="action-btn action-btn-interview" onclick="setJobStatusDetail({{ detail.id }}, 'interview')">📞 Marcar Entrevista</button>
-      <button type="button" class="action-btn action-btn-secondary" onclick="setJobStatusDetail({{ detail.id }}, 'new')">Quitar solicitada</button>
-    {% elif detail.status != 'discarded' %}
-      <button type="button" class="action-btn action-btn-applied" onclick="setJobStatusDetail({{ detail.id }}, 'applied')">✓ Marcar como solicitada</button>
-      <button type="button" class="action-btn action-btn-interview" onclick="setJobStatusDetail({{ detail.id }}, 'interview')">📞 Marcar Entrevista</button>
-    {% endif %}
 
-    {% if detail.status != 'discarded' %}
-      <button type="button" class="action-btn action-btn-secondary" onclick="discardJob({{ detail.id }})">✕ Descartar oferta</button>
-    {% else %}
-      <button type="button" class="action-btn action-btn-secondary" onclick="restoreJob({{ detail.id }})">Restaurar oferta</button>
+<style>
+  /* ============================================================
+     CABECERA DE PÁGINA
+     ============================================================ */
+  .page-head {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 1rem; flex-wrap: wrap; margin: 1.75rem 0 1.25rem;
+  }
+  .page-head p { margin: .15rem 0 0; }
+
+  .discover { display: inline-flex; align-items: stretch; }
+  .discover select {
+    width: auto; min-width: 9rem;
+    border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+    border-right: none; font-size: .85rem; background-color: var(--surface);
+  }
+  .discover .btn { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+  .discover select:focus { position: relative; z-index: 1; }
+
+  /* ============================================================
+     AVISOS
+     ============================================================ */
+  .banner {
+    display: flex; align-items: center; gap: .6rem;
+    border: 1px solid var(--border); background: var(--surface);
+    border-radius: var(--radius); padding: .6rem .85rem;
+    font-size: .85rem; color: var(--text-2); margin-bottom: 1rem;
+  }
+  .banner-info  { background: var(--accent-soft); border-color: #d8e4ff; color: var(--accent-dark); }
+  .banner-good  { background: #f0fdf4; border-color: #cbeed8; color: var(--good); }
+  .banner-bad   { background: #fef2f2; border-color: #f7d4d4; color: var(--bad); }
+  .spinner {
+    width: 13px; height: 13px; border-radius: 50%; flex: none;
+    border: 2px solid currentColor; border-right-color: transparent;
+    animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ============================================================
+     BARRA DE FILTROS
+     ============================================================ */
+  .toolbar { display: flex; flex-direction: column; gap: .75rem; margin-bottom: 1rem; }
+  .toolbar-row { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+
+  .search { position: relative; flex: 1; min-width: 220px; }
+  .search svg {
+    position: absolute; left: .65rem; top: 50%; transform: translateY(-50%);
+    width: 16px; height: 16px; color: var(--muted); pointer-events: none;
+  }
+  .search input { padding-left: 2.1rem; padding-right: 2rem; }
+  .search .clear {
+    position: absolute; right: .35rem; top: 50%; transform: translateY(-50%);
+    display: none;
+  }
+  .search.has-value .clear { display: inline-flex; }
+
+  .count { font-size: .82rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  details.filters { position: relative; }
+  details.filters > summary {
+    list-style: none; cursor: pointer;
+    display: inline-flex; align-items: center; gap: .4rem;
+    font-size: .865rem; font-weight: 550; color: var(--text);
+    border: 1px solid var(--border-strong); background: var(--surface);
+    border-radius: var(--radius-sm); padding: .48rem .85rem;
+  }
+  details.filters > summary::-webkit-details-marker { display: none; }
+  details.filters > summary:hover { background: var(--surface-2); }
+  details.filters[open] > summary { background: var(--surface-2); }
+  details.filters .dot-on {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+  }
+  .filters-panel {
+    position: absolute; right: 0; top: calc(100% + .4rem); z-index: 40;
+    width: min(320px, calc(100vw - 2rem));
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); box-shadow: var(--shadow-lg);
+    padding: .9rem; display: grid; gap: .85rem;
+  }
+  .field { display: grid; gap: .3rem; }
+  .field > label { font-size: .78rem; color: var(--muted); font-weight: 550; }
+  .check {
+    display: flex; align-items: center; gap: .55rem;
+    font-size: .85rem; color: var(--text-2); cursor: pointer;
+  }
+  .check input { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+  .panel-sep { height: 1px; background: var(--border); }
+
+  /* ============================================================
+     LISTA DE OFERTAS
+     ============================================================ */
+  .list {
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--surface); overflow: hidden;
+  }
+  .job {
+    display: grid;
+    grid-template-columns: 26px 44px minmax(0, 1fr) auto;
+    align-items: center; gap: .85rem;
+    padding: .8rem 1rem;
+    border-top: 1px solid var(--border);
+    transition: background .12s;
+  }
+  .job:first-child { border-top: none; }
+  .job:hover { background: #fcfcfb; }
+  .job.is-selected { background: var(--accent-soft); }
+  .job.is-leaving { opacity: 0; transform: translateX(6px); transition: opacity .18s, transform .18s; }
+
+  .job-pick { display: flex; align-items: center; justify-content: center; }
+  .job-pick input {
+    width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer;
+    opacity: 0; transition: opacity .12s;
+  }
+  .job:hover .job-pick input,
+  .job-pick input:checked,
+  .job-pick input:focus-visible,
+  .list.has-selection .job-pick input { opacity: 1; }
+
+  .job-score {
+    display: flex; align-items: center; justify-content: center;
+    height: 30px; border-radius: var(--radius-sm);
+    font-size: .82rem; font-weight: 650; font-variant-numeric: tabular-nums;
+    background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border);
+  }
+  .s-high { background: #f0fdf4; color: var(--good); border-color: #cbeed8; }
+  .s-mid  { background: #fffbeb; color: var(--warn); border-color: #f6e6b8; }
+
+  .job-body { min-width: 0; }
+  .job-line { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+  .job-title {
+    font-size: .93rem; font-weight: 600; color: var(--text); text-decoration: none;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .job-title:hover { color: var(--accent); }
+  .job-meta {
+    display: flex; align-items: center; gap: .4rem; flex-wrap: wrap;
+    margin-top: .2rem; font-size: .8rem; color: var(--muted); min-width: 0;
+  }
+  .job-meta .co { color: var(--text-2); font-weight: 500; }
+  .job-meta .sep { color: var(--border-strong); }
+  .job-meta a { color: inherit; text-decoration: none; }
+  .job-meta a:hover { color: var(--accent); }
+
+  .job-actions { display: flex; align-items: center; gap: .15rem; }
+  .job-actions [data-act] { display: inline-flex; }
+  .job-actions .icon-btn { opacity: .45; }
+  .job:hover .job-actions .icon-btn,
+  .job-actions .icon-btn:focus-visible { opacity: 1; }
+  @media (hover: none) { .job-actions .icon-btn { opacity: 1; } }
+
+  .job-actions [data-act="new"],
+  .job-actions [data-act="restore"] { display: none; }
+  .job[data-status="applied"]   [data-act="applied"],
+  .job[data-status="interview"] [data-act="applied"],
+  .job[data-status="interview"] [data-act="interview"] { display: none; }
+  .job[data-status="applied"]   [data-act="new"],
+  .job[data-status="interview"] [data-act="new"] { display: inline-flex; }
+  .job[data-status="discarded"] [data-act="applied"],
+  .job[data-status="discarded"] [data-act="interview"],
+  .job[data-status="discarded"] [data-act="new"],
+  .job[data-status="discarded"] [data-act="discarded"] { display: none; }
+  .job[data-status="discarded"] [data-act="restore"] { display: inline-flex; }
+  .job[data-status="discarded"] .job-title { color: var(--muted); }
+
+  .act-applied:hover   { color: var(--accent); }
+  .act-interview:hover { color: var(--warn); }
+  .act-discard:hover   { color: var(--bad); }
+
+  /* Estado vacío */
+  .empty {
+    border: 1px dashed var(--border-strong); border-radius: var(--radius);
+    padding: 3rem 1.5rem; text-align: center; color: var(--muted);
+    background: var(--surface);
+  }
+  .empty strong { display: block; color: var(--text); font-size: .95rem; margin-bottom: .3rem; }
+
+  /* ============================================================
+     BARRA DE SELECCIÓN MÚLTIPLE
+     ============================================================ */
+  .batchbar {
+    position: fixed; left: 50%; bottom: 1.25rem; z-index: 1500;
+    transform: translate(-50%, 130%);
+    display: flex; align-items: center; gap: .35rem;
+    background: #18181b; color: #fafafa;
+    border-radius: var(--radius-pill); padding: .4rem .5rem .4rem .95rem;
+    box-shadow: var(--shadow-lg); font-size: .85rem;
+    transition: transform .22s cubic-bezier(.16,1,.3,1);
+  }
+  .batchbar.is-open { transform: translate(-50%, 0); }
+  .batchbar .n { font-variant-numeric: tabular-nums; margin-right: .5rem; white-space: nowrap; }
+  .batchbar button {
+    font: inherit; font-size: .82rem; font-weight: 550;
+    background: transparent; border: none; color: #e4e4e7;
+    padding: .35rem .7rem; border-radius: var(--radius-pill); cursor: pointer;
+  }
+  .batchbar button:hover { background: rgba(255,255,255,.12); color: #fff; }
+  .batchbar .close { color: #a1a1aa; padding: .35rem .6rem; }
+
+  /* ============================================================
+     DETALLE DE OFERTA
+     ============================================================ */
+  .detail-head { margin: 1.75rem 0 1.25rem; }
+  .detail-title { font-size: 1.5rem; font-weight: 650; letter-spacing: -.02em; margin: 0 0 .3rem; }
+  .detail-sub { color: var(--text-2); font-size: .95rem; }
+  .detail-chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .75rem; }
+  .detail-grid { display: grid; grid-template-columns: minmax(0,1fr) 260px; gap: 1.25rem; align-items: start; }
+  .analysis h3 { margin-top: 1.5rem; }
+  .analysis h3:first-child { margin-top: 0; }
+  .analysis ul { margin: 0; padding-left: 1.1rem; color: var(--text-2); font-size: .9rem; }
+  .analysis li { margin-bottom: .3rem; }
+  .analysis .none { color: var(--muted); font-size: .875rem; }
+  .side-actions { display: grid; gap: .5rem; }
+  .side-actions .btn { width: 100%; }
+  .meta-list { display: grid; gap: .5rem; margin-top: 1rem; font-size: .82rem; }
+  .meta-list div { display: flex; justify-content: space-between; gap: .75rem; }
+  .meta-list dt, .meta-list .k { color: var(--muted); }
+  .meta-list .v { color: var(--text-2); text-align: right; }
+
+  .backlink {
+    display: inline-flex; align-items: center; gap: .35rem;
+    color: var(--muted); text-decoration: none; font-size: .85rem; margin-bottom: 1rem;
+  }
+  .backlink:hover { color: var(--text); }
+
+  @media (max-width: 760px) {
+    .detail-grid { grid-template-columns: 1fr; }
+    .job { grid-template-columns: 26px 40px minmax(0,1fr); row-gap: .5rem; }
+    .job-actions { grid-column: 2 / -1; }
+    .job-actions .icon-btn { opacity: 1; }
+  }
+</style>
+
+{% if detail %}
+{# ================================================================
+   VISTA DETALLE
+   ================================================================ #}
+{% set dst = 'interview' if detail.status in ('interview','entrevista') else ('applied' if detail.status in ('applied','solicitada') else (detail.status or 'new')) %}
+<a href="/dashboard" class="backlink">← Volver a ofertas</a>
+
+<div class="detail-head">
+  <h1 class="detail-title">{{ detail.title }}</h1>
+  <div class="detail-sub">{{ detail.company }}{% if detail.location %} · {{ detail.location }}{% endif %}</div>
+  <div class="detail-chips">
+    {% set s = detail.final_score or 0 %}
+    <span class="chip {{ 'chip-good' if s >= 75 else ('chip-warn' if s >= 50 else '') }}">Score {{ s | round(1) }}</span>
+    {% if dst == 'interview' %}<span class="chip chip-warn">Entrevista</span>
+    {% elif dst == 'applied' %}<span class="chip chip-accent">Solicitada</span>
+    {% elif dst == 'discarded' %}<span class="chip">Descartada</span>{% endif %}
+    {% if detail.salary_raw %}<span class="chip chip-good">{{ detail.salary_raw }}</span>{% endif %}
+    {% if detail.remote_type %}<span class="chip">{{ detail.remote_type }}</span>{% endif %}
+    <span class="chip">{{ detail.source }}</span>
+    {% if detail.recommendation == 'skip' %}<span class="chip chip-bad">No cumple requisitos</span>{% endif %}
+  </div>
+</div>
+
+<div class="detail-grid">
+  <div class="card analysis">
+    <h3>Puntos a favor</h3>
+    {% if detail.pros %}<ul>{% for p in detail.pros %}<li>{{ p }}</li>{% endfor %}</ul>
+    {% else %}<p class="none">Sin datos.</p>{% endif %}
+
+    <h3>Puntos en contra</h3>
+    {% if detail.cons %}<ul>{% for c in detail.cons %}<li>{{ c }}</li>{% endfor %}</ul>
+    {% else %}<p class="none">Sin datos.</p>{% endif %}
+
+    <h3>Requisitos que faltan</h3>
+    {% if detail.missing_requirements %}<ul>{% for m in detail.missing_requirements %}<li>{{ m }}</li>{% endfor %}</ul>
+    {% else %}<p class="none">Ninguno detectado.</p>{% endif %}
+
+    {% if dst == 'discarded' and detail.discard_reason %}
+      <h3>Motivo del descarte</h3>
+      <p class="none">{{ detail.discard_reason }}</p>
     {% endif %}
-    <a href="{{ detail.apply_link }}" target="_blank" rel="noopener noreferrer" class="action-btn action-btn-secondary" style="margin-left:auto;font-weight:600;">Ir a la oferta original ↗</a>
   </div>
 
-  <p><a href="/dashboard">&larr; Volver al dashboard</a></p>
+  <div class="card">
+    <div class="side-actions">
+      <a class="btn btn-primary" href="{{ detail.apply_link }}" target="_blank" rel="noopener noreferrer">Ver oferta original ↗</a>
+      {% if dst == 'interview' %}
+        <button type="button" class="btn" onclick="detailStatus({{ detail.id }}, 'applied')">Volver a solicitada</button>
+        <button type="button" class="btn btn-quiet" onclick="detailStatus({{ detail.id }}, 'new')">Quitar estado</button>
+      {% elif dst == 'applied' %}
+        <button type="button" class="btn" onclick="detailStatus({{ detail.id }}, 'interview')">Marcar entrevista</button>
+        <button type="button" class="btn btn-quiet" onclick="detailStatus({{ detail.id }}, 'new')">Quitar estado</button>
+      {% elif dst != 'discarded' %}
+        <button type="button" class="btn" onclick="detailStatus({{ detail.id }}, 'applied')">Marcar solicitada</button>
+        <button type="button" class="btn" onclick="detailStatus({{ detail.id }}, 'interview')">Marcar entrevista</button>
+      {% endif %}
+      {% if dst != 'discarded' %}
+        <button type="button" class="btn btn-danger" onclick="openDiscard({{ detail.id }})">Descartar</button>
+      {% else %}
+        <button type="button" class="btn" onclick="detailStatus({{ detail.id }}, 'new')">Restaurar</button>
+      {% endif %}
+    </div>
+
+    <div class="meta-list">
+      <div><span class="k">Publicada</span><span class="v">{{ detail.posted_at.strftime('%d/%m/%Y') if detail.posted_at else '—' }}</span></div>
+      <div><span class="k">Detectada</span><span class="v">{{ detail.fetched_at.strftime('%d/%m/%Y') if detail.fetched_at else '—' }}</span></div>
+      <div><span class="k">Score LLM</span><span class="v">{{ detail.llm_score if detail.llm_score is not none else 'pendiente' }}</span></div>
+      <div><span class="k">Variante</span><span class="v">{{ detail.variant_query or '—' }}</span></div>
+    </div>
+  </div>
+</div>
+
+<dialog id="discard-dialog">
+  <h2 style="margin-bottom:.35rem;">Descartar oferta</h2>
+  <p class="muted" style="margin:0 0 .85rem;">Puedes indicar un motivo para recordarlo más adelante. Es opcional.</p>
+  <input type="text" id="discard-reason" placeholder="Motivo (opcional)">
+  <div style="display:flex;justify-content:flex-end;gap:.5rem;margin-top:1rem;">
+    <button type="button" class="btn btn-quiet" onclick="document.getElementById('discard-dialog').close()">Cancelar</button>
+    <button type="button" class="btn btn-danger" id="discard-confirm">Descartar</button>
+  </div>
+</dialog>
+
+<script>
+  function detailStatus(id, status, reason) {
+    fetch('/api/job/' + id + '/status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: status, reason: reason || null })
+    }).then(function (r) {
+      if (r.ok) { location.reload(); }
+      else { toast('No se pudo actualizar el estado.', { error: true }); }
+    }).catch(function () { toast('Error de conexión.', { error: true }); });
+  }
+  function openDiscard(id) {
+    var dlg = document.getElementById('discard-dialog');
+    document.getElementById('discard-reason').value = '';
+    document.getElementById('discard-confirm').onclick = function () {
+      detailStatus(id, 'discarded', document.getElementById('discard-reason').value.trim());
+    };
+    dlg.showModal();
+  }
+</script>
+
+{% else %}
+{# ================================================================
+   VISTA LISTA
+   ================================================================ #}
+{% set filter_params = ('&source=' + source if source != 'all' else '') + ('&variant_id=' + variant_id if variant_id != 'all' else '') + ('&sort=' + sort if sort != 'recent' else '') + ('&show_skipped=1' if show_skipped else '') + ('&show_discarded=1' if show_discarded else '') %}
+{% set has_extra_filters = (source != 'all') or (variant_id != 'all') or (sort not in (none, 'recent')) or show_skipped or show_discarded %}
+
+<div class="page-head">
+  <div>
+    <h1>Ofertas</h1>
+    <p class="muted">Evaluadas y puntuadas automáticamente según tu CV</p>
+  </div>
+  <div class="discover">
+    <select id="discovery-source-select" aria-label="Fuente de búsqueda" onchange="updateDiscoveryButtonText()">
+      <option value="all">Todas las fuentes</option>
+      {% for src in available_sources %}
+      <option value="{{ src.id }}" {{ 'selected' if src.id == 'linkedin' else '' }}>{{ src.name }}{% if not src.is_available %} ({{ src.badge_label }}){% endif %}</option>
+      {% endfor %}
+    </select>
+    <button id="btn-trigger-discovery" class="btn btn-primary" onclick="triggerDiscovery()">
+      <span id="btn-discovery-text">Buscar ofertas</span>
+    </button>
+  </div>
+</div>
+
+<div id="discovery-status-banner" class="banner" hidden></div>
+
+{% if pending_llm_count and pending_llm_count > 0 %}
+<div class="banner banner-info">
+  {{ pending_llm_count }} oferta{{ 's' if pending_llm_count != 1 else '' }} en cola de evaluación. Aparecerán en cuanto se procesen.
+</div>
+{% endif %}
+
+<div class="toolbar">
+  <div class="segmented">
+    <a href="/dashboard?status=all{{ filter_params }}" aria-current="{{ 'true' if status == 'all' else 'false' }}">Todas <span class="n">{{ status_counts.total_active or 0 }}</span></a>
+    <a href="/dashboard?status=new{{ filter_params }}" aria-current="{{ 'true' if status == 'new' else 'false' }}">Nuevas <span class="n">{{ status_counts.new_count or 0 }}</span></a>
+    <a href="/dashboard?status=applied{{ filter_params }}" aria-current="{{ 'true' if status in ('applied','solicitada') else 'false' }}">Solicitadas <span class="n">{{ status_counts.applied_count or 0 }}</span></a>
+    <a href="/dashboard?status=interview{{ filter_params }}" aria-current="{{ 'true' if status in ('interview','entrevista') else 'false' }}">Entrevistas <span class="n">{{ status_counts.interview_count or 0 }}</span></a>
+    <a href="/dashboard?status=discarded{{ filter_params }}" aria-current="{{ 'true' if status == 'discarded' else 'false' }}">Descartadas <span class="n">{{ status_counts.discarded_count or 0 }}</span></a>
+  </div>
+
+  <div class="toolbar-row">
+    <div class="search" id="search-wrap">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="9" cy="9" r="5.5"/><path d="M13.2 13.2 17 17"/></svg>
+      <input type="search" id="q" placeholder="Filtrar por puesto, empresa o ubicación…  (/)" oninput="filterList()" autocomplete="off">
+      <button type="button" class="icon-btn clear" onclick="clearSearch()" aria-label="Limpiar búsqueda">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M6 6l8 8M14 6l-8 8"/></svg>
+      </button>
+    </div>
+
+    <details class="filters" id="filters">
+      <summary>
+        Filtros {% if has_extra_filters %}<span class="dot-on"></span>{% endif %}
+      </summary>
+      <div class="filters-panel">
+        <div class="field">
+          <label for="f-sort">Ordenar por</label>
+          <select id="f-sort" onchange="setParam('sort', this.value)">
+            <option value="recent" {{ 'selected' if sort in (none, 'recent') else '' }}>Más recientes</option>
+            <option value="score" {{ 'selected' if sort == 'score' else '' }}>Mayor puntuación</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-variant">Variante de búsqueda</label>
+          <select id="f-variant" onchange="setParam('variant_id', this.value)">
+            <option value="all" {{ 'selected' if variant_id == 'all' else '' }}>Todas</option>
+            {% for v in variants %}
+            <option value="{{ v.id }}" {{ 'selected' if variant_id == v.id|string else '' }}>{{ v.query_text | truncate(34) }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-source">Fuente</label>
+          <select id="f-source" onchange="setParam('source', this.value)">
+            <option value="all" {{ 'selected' if source == 'all' else '' }}>Todas</option>
+            {% for src in available_sources %}
+            <option value="{{ src.id }}" {{ 'selected' if source == src.id else '' }}>{{ src.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="panel-sep"></div>
+
+        <label class="check">
+          <input type="checkbox" {{ 'checked' if show_skipped else '' }} onchange="toggleParam('show_skipped')">
+          Incluir ofertas que no cumplen requisitos
+        </label>
+        {% if status in ('all', 'new') %}
+        <label class="check">
+          <input type="checkbox" {{ 'checked' if show_discarded else '' }} onchange="toggleParam('show_discarded')">
+          Incluir descartadas
+        </label>
+        {% endif %}
+
+        <div class="panel-sep"></div>
+
+        <form method="post" action="/dashboard/clear-jobs" onsubmit="return confirm('Se eliminarán TODAS tus ofertas guardadas. Tu perfil y tus variantes no se verán afectados. ¿Continuar?');">
+          <button type="submit" class="btn btn-danger btn-sm" style="width:100%">Eliminar todas las ofertas</button>
+        </form>
+      </div>
+    </details>
+
+    <span class="count" id="count">{{ jobs|length }} oferta{{ 's' if jobs|length != 1 else '' }}</span>
+  </div>
+</div>
+
+{% if jobs %}
+<div class="list" id="list">
+  {% for job in jobs %}
+  {% set st = 'interview' if job.status in ('interview','entrevista') else ('applied' if job.status in ('applied','solicitada') else (job.status or 'new')) %}
+  {% set s = job.final_score or 0 %}
+  <article class="job" id="job-{{ job.id }}" data-job-id="{{ job.id }}" data-status="{{ st }}"
+           data-text="{{ job.title }} {{ job.company }} {{ job.location or '' }} {{ job.remote_type or '' }} {{ job.source }}">
+    <label class="job-pick">
+      <input type="checkbox" onchange="onPick(this)" aria-label="Seleccionar {{ job.title }}">
+    </label>
+
+    <div class="job-score {{ 's-high' if s >= 75 else ('s-mid' if s >= 50 else '') }}" title="Compatibilidad con tu CV">{{ s | round(0) | int }}</div>
+
+    <div class="job-body">
+      <div class="job-line">
+        <a class="job-title" href="/dashboard/{{ job.id }}">{{ job.title }}</a>
+        <span class="job-state" id="state-{{ job.id }}">
+          {% if st == 'interview' %}<span class="chip chip-warn">Entrevista</span>
+          {% elif st == 'applied' %}<span class="chip chip-accent">Solicitada</span>
+          {% elif st == 'discarded' %}<span class="chip">Descartada</span>
+          {% elif job.recommendation == 'skip' %}<span class="chip chip-bad">No apta</span>{% endif %}
+        </span>
+      </div>
+      <div class="job-meta">
+        <span class="co">{{ job.company }}</span>
+        {% if job.location %}<span class="sep">·</span><span>{{ job.location }}</span>{% endif %}
+        {% set rt = (job.remote_type or '') | lower %}
+        {% if 'remote' in rt or 'remoto' in rt %}<span class="sep">·</span><span>Remoto</span>
+        {% elif 'hybrid' in rt or 'hibrido' in rt or 'híbrido' in rt %}<span class="sep">·</span><span>Híbrido</span>
+        {% elif 'onsite' in rt or 'presencial' in rt %}<span class="sep">·</span><span>Presencial</span>{% endif %}
+        {% if job.salary_raw %}<span class="chip chip-good">{{ job.salary_raw }}</span>{% endif %}
+        <span class="sep">·</span>
+        <span>{{ (job.posted_at or job.fetched_at).strftime('%d/%m/%y') if (job.posted_at or job.fetched_at) else '—' }}</span>
+      </div>
+    </div>
+
+    <div class="job-actions">
+      <button type="button" class="icon-btn act-applied" data-act="applied" title="Marcar como solicitada" aria-label="Marcar como solicitada" onclick="setStatus({{ job.id }}, 'applied')">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 10.5 8 14l7.5-8"/></svg>
+      </button>
+      <button type="button" class="icon-btn act-interview" data-act="interview" title="Marcar entrevista" aria-label="Marcar entrevista" onclick="setStatus({{ job.id }}, 'interview')">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3.5 8 6.6 6.4 8.2a9 9 0 0 0 5.4 5.4l1.6-1.6 3.1 1.5v2.6c0 .7-.6 1.3-1.3 1.2C7.6 16.8 3.2 12.4 2.3 4.8c-.1-.7.5-1.3 1.2-1.3z"/></svg>
+      </button>
+      <button type="button" class="icon-btn" data-act="new" title="Quitar estado" aria-label="Quitar estado" onclick="setStatus({{ job.id }}, 'new')">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4 3.5 7.5 7 11"/><path d="M3.5 7.5H12a4.5 4.5 0 0 1 0 9h-4"/></svg>
+      </button>
+      <button type="button" class="icon-btn act-discard" data-act="discarded" title="Descartar" aria-label="Descartar" onclick="setStatus({{ job.id }}, 'discarded')">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9"/></svg>
+      </button>
+      <button type="button" class="icon-btn" data-act="restore" title="Restaurar" aria-label="Restaurar" onclick="setStatus({{ job.id }}, 'new')">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 4.5v4h4"/><path d="M3.9 8.5A6.5 6.5 0 1 1 3.9 12"/></svg>
+      </button>
+      <a class="icon-btn" href="{{ job.apply_link }}" target="_blank" rel="noopener noreferrer" title="Abrir oferta original" aria-label="Abrir oferta original">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-3"/><path d="M12 4h4v4"/><path d="M9 11l7-7"/></svg>
+      </a>
+    </div>
+  </article>
+  {% endfor %}
+</div>
+<div class="empty" id="empty-search" hidden>
+  <strong>Ningún resultado</strong>
+  Prueba con otro texto de búsqueda.
 </div>
 {% else %}
-<div class="card" style="padding:1.5rem;">
-  <!-- Header with title & discovery controls -->
-  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.75rem;margin-bottom:1.25rem;">
-    <div>
-      <h1 style="margin:0;font-size:1.5rem;font-weight:700;color:#0f172a;letter-spacing:-0.02em;">Dashboard de Empleo</h1>
-      <p class="muted" style="margin:0.25rem 0 0 0;">Ofertas evaluadas y rankeadas automáticamente con IA</p>
-    </div>
-    <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-      <div style="display:inline-flex;align-items:center;background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;padding:0.2rem 0.6rem;">
-        <label for="discovery-source-select" style="font-size:0.8rem;font-weight:600;color:#64748b;margin-right:0.35rem;">Fuente:</label>
-        <select id="discovery-source-select" onchange="updateDiscoveryButtonText()" style="border:none;background:transparent;font-size:0.85rem;font-weight:600;color:#1e293b;outline:none;cursor:pointer;padding:0.3rem 0.2rem;">
-          <option value="all">Todas las fuentes activas</option>
-          {% for src in available_sources %}
-          <option value="{{ src.id }}" {{ 'selected' if src.id == 'linkedin' else '' }}>
-            {{ src.name }} {% if not src.is_available %}({{ src.badge_label }}){% endif %}
-          </option>
-          {% endfor %}
-        </select>
-      </div>
-      <button id="btn-trigger-discovery" onclick="triggerDiscovery()" style="background:#2563eb;color:white;border:none;border-radius:8px;padding:0.5rem 1rem;font-weight:600;font-size:0.875rem;cursor:pointer;display:inline-flex;align-items:center;gap:0.4rem;box-shadow:0 1px 2px rgba(0,0,0,0.05);transition:all 0.15s;">
-        <span id="btn-discovery-icon">🔍</span> <span id="btn-discovery-text">Buscar en LinkedIn</span>
-      </button>
-      <form method="post" action="/dashboard/clear-jobs" style="display:inline;" onsubmit="return confirm('¿Seguro que quieres eliminar TODAS tus ofertas guardadas? Esta acción no se puede deshacer. No afecta a tu perfil ni a tus variantes de búsqueda.');">
-        <button type="submit" style="background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:8px;padding:0.5rem 0.85rem;font-size:0.85rem;font-weight:600;cursor:pointer;transition:all 0.15s;" title="Eliminar todas las ofertas guardadas">Eliminar ofertas</button>
-      </form>
-    </div>
-  </div>
-
-  <div id="discovery-status-banner" style="display:none;margin-bottom:1rem;padding:0.65rem 1rem;border-radius:8px;font-size:0.875rem;"></div>
-
-  <!-- Metric Stats Cards -->
-  {% set filter_params = ('&source=' + source if source != 'all' else '') + ('&variant_id=' + variant_id if variant_id != 'all' else '') + ('&sort=' + sort if sort != 'recent' else '') + ('&show_skipped=1' if show_skipped else '') + ('&show_discarded=1' if show_discarded else '') %}
-  <div class="stats-grid">
-    <a href="/dashboard?status=all{{ filter_params }}" class="stat-card" style="border-left: 3px solid #3b82f6;">
-      <div class="stat-card-title">
-        <span>Total Activas</span>
-        <span>💼</span>
-      </div>
-      <div class="stat-card-value">{{ status_counts.total_active or 0 }}</div>
-    </a>
-    <a href="/dashboard?status=interview{{ filter_params }}" class="stat-card" style="border-left: 3px solid #f59e0b;">
-      <div class="stat-card-title">
-        <span>En Entrevista</span>
-        <span>📞</span>
-      </div>
-      <div class="stat-card-value" style="color:#b45309;">{{ status_counts.interview_count or 0 }}</div>
-    </a>
-    <a href="/dashboard?status=applied{{ filter_params }}" class="stat-card" style="border-left: 3px solid #2563eb;">
-      <div class="stat-card-title">
-        <span>Solicitadas</span>
-        <span>✓</span>
-      </div>
-      <div class="stat-card-value" style="color:#1d4ed8;">{{ status_counts.applied_count or 0 }}</div>
-    </a>
-    <a href="/dashboard?status=new{{ filter_params }}" class="stat-card" style="border-left: 3px solid #10b981;">
-      <div class="stat-card-title">
-        <span>Nuevas</span>
-        <span>✨</span>
-      </div>
-      <div class="stat-card-value" style="color:#047857;">{{ status_counts.new_count or 0 }}</div>
-    </a>
-    <a href="/dashboard?status=discarded{{ filter_params }}" class="stat-card" style="border-left: 3px solid #94a3b8;">
-      <div class="stat-card-title">
-        <span>Descartadas</span>
-        <span>✕</span>
-      </div>
-      <div class="stat-card-value" style="color:#64748b;">{{ status_counts.discarded_count or 0 }}</div>
-    </a>
-  </div>
-
-  {% if pending_llm_count and pending_llm_count > 0 %}
-  <div style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:8px;padding:0.6rem 0.9rem;font-size:0.85rem;margin-bottom:1rem;">
-    ⏳ Hay <strong>{{ pending_llm_count }}</strong> oferta{{ 's' if pending_llm_count != 1 else '' }} nueva{{ 's' if pending_llm_count != 1 else '' }} en cola de evaluación LLM; aparecerán aquí en cuanto el cron las procese.
-  </div>
-  {% endif %}
-
-  <!-- Filter Status Tabs -->
-  <div class="filters">
-    <a href="/dashboard?status=all{{ filter_params }}" class="{{ 'active' if status == 'all' else '' }}">
-      Todas <span class="filter-badge-count">{{ status_counts.total_active or 0 }}</span>
-    </a>
-    <a href="/dashboard?status=new{{ filter_params }}" class="{{ 'active' if status == 'new' else '' }}">
-      Nuevas <span class="filter-badge-count">{{ status_counts.new_count or 0 }}</span>
-    </a>
-    <a href="/dashboard?status=applied{{ filter_params }}" class="{{ 'active' if status in ('applied', 'solicitada') else '' }}">
-      Solicitadas <span class="filter-badge-count">{{ status_counts.applied_count or 0 }}</span>
-    </a>
-    <a href="/dashboard?status=interview{{ filter_params }}" class="{{ 'active' if status in ('interview', 'entrevista') else '' }}">
-      📞 Entrevistas <span class="filter-badge-count">{{ status_counts.interview_count or 0 }}</span>
-    </a>
-    <a href="/dashboard?status=viewed{{ filter_params }}" class="{{ 'active' if status == 'viewed' else '' }}">
-      Vistas <span class="filter-badge-count">{{ status_counts.viewed_count or 0 }}</span>
-    </a>
-    <a href="/dashboard?status=discarded{{ filter_params }}" class="{{ 'active' if status == 'discarded' else '' }}">
-      Descartadas <span class="filter-badge-count">{{ status_counts.discarded_count or 0 }}</span>
-    </a>
-  </div>
-
-  <!-- Search & Secondary Filters Toolbar -->
-  <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;margin:1rem 0 0.85rem 0;">
-    <div class="search-container">
-      <span class="search-icon">🔍</span>
-      <input
-        type="text"
-        id="table-live-filter"
-        class="search-input"
-        placeholder="Buscar por puesto, empresa, ubicación, modalidad... (Pulsa '/' para buscar)"
-        oninput="filterTableLive()"
-      >
-      <button type="button" id="search-clear-btn" class="search-clear-btn" onclick="clearLiveSearch()" title="Limpiar búsqueda">✕</button>
-    </div>
-
-    <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
-      <select onchange="updateDashboardFilter('variant_id', this.value)" style="padding:0.5rem 0.75rem;border:1px solid #cbd5e1;border-radius:8px;font-size:0.84rem;background:#fff;cursor:pointer;outline:none;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
-        <option value="all" {{ 'selected' if variant_id == 'all' else '' }}>Todas las variantes</option>
-        {% for v in variants %}
-        <option value="{{ v.id }}" {{ 'selected' if variant_id == v.id|string else '' }}>{{ v.query_text | truncate(28) }}</option>
-        {% endfor %}
-      </select>
-
-      <select onchange="updateDashboardFilter('source', this.value)" style="padding:0.5rem 0.75rem;border:1px solid #cbd5e1;border-radius:8px;font-size:0.84rem;background:#fff;cursor:pointer;outline:none;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
-        <option value="all" {{ 'selected' if source == 'all' else '' }}>Todas las fuentes</option>
-        {% for src in available_sources %}
-        <option value="{{ src.id }}" {{ 'selected' if source == src.id else '' }}>{{ src.name }}</option>
-        {% endfor %}
-      </select>
-    </div>
-
-    <div style="margin-left:auto;display:flex;align-items:center;gap:0.75rem;">
-      <span id="table-filter-count" class="muted" style="font-weight:600;font-size:0.82rem;background:#f1f5f9;padding:0.25rem 0.65rem;border-radius:6px;">
-        {{ jobs|length }} oferta{{ 's' if jobs|length != 1 else '' }}
-      </span>
-    </div>
-  </div>
-
-  <!-- Audit & Discarded Toggles -->
-  <div style="display:flex;gap:1.25rem;flex-wrap:wrap;font-size:0.82rem;margin-bottom:0.75rem;color:#64748b;">
-    <span>
-      {% if show_skipped %}
-        <a href="javascript:void(0)" onclick="toggleDashboardParam('show_skipped')" style="color:#2563eb;text-decoration:none;">Ocultar no aptas (filtro requisitos)</a>
-      {% else %}
-        <a href="javascript:void(0)" onclick="toggleDashboardParam('show_skipped')" style="color:#64748b;text-decoration:none;">👁️ Ver también ofertas que no cumplen requisitos</a>
-      {% endif %}
-    </span>
-    {% if status in ('all', 'new') %}
-    <span>
-      {% if show_discarded %}
-        <a href="javascript:void(0)" onclick="toggleDashboardParam('show_discarded')" style="color:#2563eb;text-decoration:none;">Ocultar descartadas</a>
-      {% else %}
-        <a href="javascript:void(0)" onclick="toggleDashboardParam('show_discarded')" style="color:#64748b;text-decoration:none;">👁️ Ver también descartadas</a>
-      {% endif %}
-    </span>
-    {% endif %}
-  </div>
-
-  <!-- Table with 2 Sticky Columns -->
-  <div class="table-wrap">
-    <table class="sortable">
-      <thead>
-        <tr>
-          <!-- Sticky Column 1: Checkbox + Score -->
-          <th class="sortable {{ 'sort-desc' if sort == 'score' else '' }}" data-type="number" style="width:86px;min-width:86px;max-width:86px;text-align:center;">
-            <div class="col-score-wrapper">
-              <input type="checkbox" id="select-all-checkbox" class="row-select-checkbox" title="Seleccionar todas las ofertas visibles" onchange="toggleSelectAll(this)">
-              <span title="Ordenar por puntuación">Score</span>
-            </div>
-          </th>
-          <!-- Sticky Column 2: Puesto & Empresa -->
-          <th class="sortable" data-type="text" style="min-width:280px;">Puesto & Empresa</th>
-          <!-- Regular Columns -->
-          <th class="sortable" data-type="text" style="width:110px;">Salario</th>
-          <th class="sortable" data-type="text" style="width:145px;">Ubicación</th>
-          <th class="sortable" data-type="text" style="width:95px;">Fuente</th>
-          <th class="sortable {{ 'sort-desc' if (sort or 'recent') in ('recent', 'posted') else '' }}" data-type="date" style="width:110px;">Fecha</th>
-          <th class="sortable" data-type="text" style="width:115px;">Estado</th>
-          <th style="width:170px;white-space:nowrap;text-align:right;">Acciones</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for job in jobs %}
-        <tr id="job-row-{{ job.id }}" data-job-id="{{ job.id }}">
-          <!-- Sticky Column 1 Cell -->
-          <td data-value="{{ job.final_score }}" style="text-align:center;">
-            <div class="col-score-wrapper">
-              <input type="checkbox" class="row-select-checkbox" data-job-id="{{ job.id }}" onchange="handleRowSelect(this)">
-              {% set s = job.final_score %}
-              <span class="score-pill {{ 'score-high' if s >= 75 else ('score-mid' if s >= 50 else 'score-low') }}">{{ s | round(1) }}</span>
-            </div>
-          </td>
-          <!-- Sticky Column 2 Cell -->
-          <td data-value="{{ job.title }} {{ job.company }}">
-            <div style="display:flex;align-items:center;flex-wrap:wrap;gap:0.35rem;">
-              <a href="/dashboard/{{ job.id }}" class="job-title-link">{{ job.title }}</a>
-              <a href="{{ job.apply_link }}" target="_blank" rel="noopener noreferrer" class="external-link-btn" title="Abrir oferta original en {{ job.source }}">↗</a>
-            </div>
-            <div class="company-subline">
-              <span style="font-weight:600;color:#334155;">{{ job.company }}</span>
-              {% if job.variant_query %}
-                <a href="javascript:void(0)" onclick="updateDashboardFilter('variant_id', '{{ job.variant_id }}')" class="variant-tag" title="Variante: {{ job.variant_query }}">🏷️ {{ job.variant_query | truncate(24) }}</a>
-              {% endif %}
-              {% if job.recommendation == 'skip' %}
-                <span class="badge" style="background:#fee2e2;color:#b91c1c;">no cumple requisitos</span>
-              {% endif %}
-              {% if job.status == 'discarded' %}
-                <span class="badge" style="background:#f1f5f9;color:#475569;" title="{{ job.discard_reason or 'Sin motivo' }}">descartada</span>
-              {% endif %}
-            </div>
-          </td>
-          <!-- Regular Columns -->
-          <td>
-            {% if job.salary_raw %}
-              <span class="badge" style="background:#ecfdf5;color:#047857;font-weight:600;white-space:nowrap;">💰 {{ job.salary_raw }}</span>
-            {% else %}
-              <span class="muted">—</span>
-            {% endif %}
-          </td>
-          <td data-value="{{ job.location or '' }} {{ job.remote_type or '' }}">
-            <div style="font-size:0.85rem;color:#1e293b;font-weight:500;">{{ job.location or '—' }}</div>
-            <div style="margin-top:0.2rem;">
-              {% set rt = (job.remote_type or '') | lower %}
-              {% if 'remote' in rt or 'remoto' in rt %}
-                <span class="modality-badge modality-remote">Remoto</span>
-              {% elif 'hybrid' in rt or 'hibrido' in rt or 'híbrido' in rt %}
-                <span class="modality-badge modality-hybrid">Híbrido</span>
-              {% elif 'onsite' in rt or 'presencial' in rt %}
-                <span class="modality-badge modality-onsite">Presencial</span>
-              {% elif job.remote_type %}
-                <span class="modality-badge modality-onsite">{{ job.remote_type }}</span>
-              {% endif %}
-            </div>
-          </td>
-          <td data-value="{{ job.source }}"><span class="badge {{ job.source }}">{{ job.source }}</span></td>
-          <td data-value="{{ (job.posted_at or job.fetched_at).isoformat() if (job.posted_at or job.fetched_at) else '' }}">
-            {% if job.posted_at %}
-              <span class="date-primary">{{ job.posted_at.strftime('%d/%m/%Y') }}</span>
-              {% if job.fetched_at %}
-                <span class="date-subline">añad. {{ job.fetched_at.strftime('%d/%m') }}</span>
-              {% endif %}
-            {% elif job.fetched_at %}
-              <span class="date-primary">{{ job.fetched_at.strftime('%d/%m/%Y') }}</span>
-              <span class="date-subline">detectada</span>
-            {% else %}
-              <span class="muted">—</span>
-            {% endif %}
-          </td>
-          <td id="job-status-cell-{{ job.id }}" data-value="{{ job.status }}">
-            {% if job.status in ('interview', 'entrevista') %}
-              <span class="badge" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;font-weight:600;">📞 Entrevista</span>
-            {% elif job.status in ('applied', 'solicitada') %}
-              <span class="badge" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;font-weight:600;">✓ Solicitada</span>
-            {% elif job.status == 'discarded' %}
-              <span class="badge" style="background:#fee2e2;color:#991b1b;">Descartada</span>
-            {% elif job.status == 'viewed' %}
-              <span class="badge" style="background:#f8fafc;color:#64748b;border:1px solid #e2e8f0;">Vista</span>
-            {% else %}
-              <span class="badge" style="background:#f1f5f9;color:#475569;">Nueva</span>
-            {% endif %}
-          </td>
-          <td id="job-actions-cell-{{ job.id }}" style="white-space:nowrap;text-align:right;">
-            {% if job.status in ('interview', 'entrevista') %}
-              <button type="button" class="action-btn action-btn-secondary" onclick="setJobStatus({{ job.id }}, 'applied')" title="Volver a estado Solicitada">↩ Solicitada</button>
-            {% elif job.status in ('applied', 'solicitada') %}
-              <button type="button" class="action-btn action-btn-interview" onclick="setJobStatus({{ job.id }}, 'interview')" title="¡Me han llamado para entrevista!">📞 Entrevista</button>
-              <button type="button" class="action-btn action-btn-secondary" onclick="setJobStatus({{ job.id }}, 'new')" title="Desmarcar estado solicitada">Quitar</button>
-            {% elif job.status != 'discarded' %}
-              <button type="button" class="action-btn action-btn-applied" onclick="setJobStatus({{ job.id }}, 'applied')" title="Marcar como oferta solicitada/inscrita">✓ Solicitada</button>
-              <button type="button" class="action-btn action-btn-interview" onclick="setJobStatus({{ job.id }}, 'interview')" title="Marcar directamente para entrevista">📞 Entrevista</button>
-            {% endif %}
-
-            {% if job.status != 'discarded' %}
-              <button type="button" class="action-btn action-btn-danger" onclick="discardJob({{ job.id }})" title="Descartar de la lista">✕ Descartar</button>
-            {% else %}
-              <button type="button" class="action-btn action-btn-secondary" onclick="restoreJob({{ job.id }})" title="Restaurar a lista activa">Restaurar</button>
-            {% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% if not jobs %}
-  <div style="text-align:center;padding:2.5rem 1rem;color:#64748b;">
-    <p style="font-size:1.1rem;font-weight:600;margin-bottom:0.4rem;">No hay ofertas disponibles en esta vista</p>
-    <p class="muted">El cron automático irá extrayendo y evaluando ofertas cada 4 horas según tus variantes configuradas.</p>
-  </div>
-  {% endif %}
+<div class="empty">
+  <strong>Todavía no hay ofertas en esta vista</strong>
+  La búsqueda automática se ejecuta cada 4 horas. También puedes lanzarla ahora con «Buscar ofertas».
 </div>
+{% endif %}
 
-<!-- Floating Batch Actions Toolbar -->
-<div id="batch-toolbar" class="batch-toolbar">
-  <span class="batch-count-badge" id="batch-selected-count">0 seleccionadas</span>
-  <button type="button" class="batch-btn batch-btn-danger" onclick="executeBatchAction('discarded')" title="Descartar todas las ofertas seleccionadas">
-    🗑️ Descartar
-  </button>
-  <button type="button" class="batch-btn batch-btn-primary" onclick="executeBatchAction('applied')" title="Marcar como solicitadas">
-    ✓ Marcar Solicitadas
-  </button>
-  <button type="button" class="batch-btn batch-btn-warning" onclick="executeBatchAction('interview')" title="Marcar como llamadas para entrevista">
-    📞 Marcar Entrevista
-  </button>
-  <button type="button" class="batch-btn batch-btn-ghost" onclick="clearAllSelections()" title="Cancelar selección (Esc)">
-    ✕ Cancelar
-  </button>
+<div class="batchbar" id="batchbar">
+  <span class="n" id="batch-n">0 seleccionadas</span>
+  <button type="button" onclick="batch('applied')">Solicitadas</button>
+  <button type="button" onclick="batch('interview')">Entrevista</button>
+  <button type="button" onclick="batch('discarded')">Descartar</button>
+  <button type="button" class="close" onclick="clearPicks()" title="Cancelar (Esc)">✕</button>
 </div>
 
 <script>
-function updateDashboardFilter(param, value) {
-  const url = new URL(window.location.href);
-  if (value === 'all' || !value) {
-    url.searchParams.delete(param);
-  } else {
-    url.searchParams.set(param, value);
-  }
+/* ============================================================
+   Estado de la vista
+   ============================================================ */
+var VIEW = {
+  status: "{{ status }}",
+  showDiscarded: {{ 'true' if show_discarded else 'false' }}
+};
+var LABEL = {
+  applied:   '<span class="chip chip-accent">Solicitada</span>',
+  interview: '<span class="chip chip-warn">Entrevista</span>',
+  discarded: '<span class="chip">Descartada</span>',
+  new: '', viewed: ''
+};
+
+function $(sel, root) { return (root || document).querySelector(sel); }
+function rows() { return Array.prototype.slice.call(document.querySelectorAll('.job')); }
+
+/* ============================================================
+   Filtros de servidor
+   ============================================================ */
+function setParam(param, value) {
+  var url = new URL(window.location.href);
+  if (!value || value === 'all' || (param === 'sort' && value === 'recent')) url.searchParams.delete(param);
+  else url.searchParams.set(param, value);
   window.location.href = url.toString();
 }
-
-function toggleDashboardParam(param) {
-  const url = new URL(window.location.href);
-  if (url.searchParams.get(param)) {
-    url.searchParams.delete(param);
-  } else {
-    url.searchParams.set(param, '1');
-  }
+function toggleParam(param) {
+  var url = new URL(window.location.href);
+  if (url.searchParams.get(param)) url.searchParams.delete(param);
+  else url.searchParams.set(param, '1');
   window.location.href = url.toString();
 }
+document.addEventListener('click', function (e) {
+  var f = document.getElementById('filters');
+  if (f && f.open && !f.contains(e.target)) f.open = false;
+});
 
-/* ==========================================================
-   Live Search & Keyboard Navigation
-   ========================================================== */
-function filterTableLive() {
-  const input = document.getElementById('table-live-filter');
-  const clearBtn = document.getElementById('search-clear-btn');
+/* ============================================================
+   Búsqueda en cliente
+   ============================================================ */
+function filterList() {
+  var input = $('#q');
   if (!input) return;
-  const q = input.value.toLowerCase().trim();
-  if (clearBtn) {
-    clearBtn.style.display = q ? 'block' : 'none';
-  }
-  const rows = document.querySelectorAll('table.sortable tbody tr');
-  let visible = 0;
-  rows.forEach(function(row) {
-    const text = row.textContent.toLowerCase();
-    const match = !q || text.includes(q);
-    row.style.display = match ? '' : 'none';
+  var q = input.value.trim().toLowerCase();
+  $('#search-wrap').classList.toggle('has-value', !!q);
+
+  var visible = 0;
+  rows().forEach(function (row) {
+    if (row.dataset.gone === '1') return;
+    var match = !q || row.dataset.text.toLowerCase().indexOf(q) !== -1;
+    row.hidden = !match;
     if (match) visible++;
   });
-  const countEl = document.getElementById('table-filter-count');
-  if (countEl) {
-    countEl.innerText = visible + ' oferta' + (visible !== 1 ? 's' : '');
-  }
-  updateBatchToolbar();
-}
 
-function clearLiveSearch() {
-  const input = document.getElementById('table-live-filter');
-  if (input) {
-    input.value = '';
-    filterTableLive();
-    input.focus();
-  }
-}
+  var empty = $('#empty-search');
+  if (empty) empty.hidden = visible !== 0;
+  var list = $('#list');
+  if (list) list.hidden = visible === 0;
 
-document.addEventListener('keydown', function(e) {
-  if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
-    e.preventDefault();
-    const input = document.getElementById('table-live-filter');
-    if (input) input.focus();
-  } else if (e.key === 'Escape') {
-    const selected = getSelectedJobIds();
-    if (selected.length > 0) {
-      clearAllSelections();
-    } else {
-      clearLiveSearch();
-    }
+  $('#count').textContent = visible + ' oferta' + (visible !== 1 ? 's' : '');
+  syncBatchbar();
+}
+function clearSearch() {
+  var input = $('#q');
+  if (!input) return;
+  input.value = '';
+  filterList();
+  input.focus();
+}
+document.addEventListener('keydown', function (e) {
+  var typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+  if (e.key === '/' && !typing) { e.preventDefault(); var i = $('#q'); if (i) i.focus(); }
+  else if (e.key === 'Escape') {
+    if (picked().length) clearPicks();
+    else if ($('#q') && $('#q').value) clearSearch();
   }
 });
 
-/* ==========================================================
-   Multi-Selection & Batch Actions
-   ========================================================== */
-function getSelectedJobIds() {
-  const checkboxes = document.querySelectorAll('.row-select-checkbox:checked');
-  const ids = [];
-  checkboxes.forEach(function(cb) {
-    const id = cb.getAttribute('data-job-id');
-    if (id) ids.push(parseInt(id, 10));
-  });
-  return ids;
+/* ============================================================
+   Cambio de estado (optimista + deshacer)
+   ============================================================ */
+function api(id, status, reason) {
+  return fetch('/api/job/' + id + '/status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: status, reason: reason || null })
+  }).then(function (r) { if (!r.ok) throw new Error('http'); return r; });
 }
 
-function updateBatchToolbar() {
-  const selectedIds = getSelectedJobIds();
-  const toolbar = document.getElementById('batch-toolbar');
-  const countBadge = document.getElementById('batch-selected-count');
-  const masterCb = document.getElementById('select-all-checkbox');
-  const allRowCbs = document.querySelectorAll('.row-select-checkbox[data-job-id]');
-
-  if (countBadge) {
-    countBadge.innerText = selectedIds.length + ' seleccionada' + (selectedIds.length !== 1 ? 's' : '');
-  }
-
-  if (toolbar) {
-    if (selectedIds.length > 0) {
-      toolbar.classList.add('active');
-    } else {
-      toolbar.classList.remove('active');
-    }
-  }
-
-  // Update master checkbox tri-state
-  if (masterCb && allRowCbs.length > 0) {
-    let visibleCount = 0;
-    let visibleCheckedCount = 0;
-    allRowCbs.forEach(function(cb) {
-      const row = cb.closest('tr');
-      if (row && row.style.display !== 'none') {
-        visibleCount++;
-        if (cb.checked) visibleCheckedCount++;
-      }
-    });
-
-    if (visibleCheckedCount === 0) {
-      masterCb.checked = false;
-      masterCb.indeterminate = false;
-    } else if (visibleCheckedCount === visibleCount) {
-      masterCb.checked = true;
-      masterCb.indeterminate = false;
-    } else {
-      masterCb.checked = false;
-      masterCb.indeterminate = true;
-    }
-  }
+function paint(row, status) {
+  var prev = row.dataset.status;
+  row.dataset.status = status;
+  var slot = $('#state-' + row.dataset.jobId);
+  if (slot) slot.innerHTML = LABEL[status] !== undefined ? LABEL[status] : '';
+  return prev;
 }
 
-function handleRowSelect(checkbox) {
-  const row = checkbox.closest('tr');
-  if (row) {
-    if (checkbox.checked) {
-      row.classList.add('selected');
-    } else {
-      row.classList.remove('selected');
-    }
-  }
-  updateBatchToolbar();
+function leavesView(status) {
+  if (VIEW.status && VIEW.status !== 'all') return status !== VIEW.status;
+  return status === 'discarded' && !VIEW.showDiscarded;
 }
 
-function toggleSelectAll(masterCheckbox) {
-  const isChecked = masterCheckbox.checked;
-  const rows = document.querySelectorAll('table.sortable tbody tr');
-  rows.forEach(function(row) {
-    if (row.style.display !== 'none') {
-      const cb = row.querySelector('.row-select-checkbox');
-      if (cb) {
-        cb.checked = isChecked;
-        if (isChecked) {
-          row.classList.add('selected');
-        } else {
-          row.classList.remove('selected');
-        }
-      }
-    }
-  });
-  updateBatchToolbar();
-}
-
-function clearAllSelections() {
-  const masterCb = document.getElementById('select-all-checkbox');
-  if (masterCb) {
-    masterCb.checked = false;
-    masterCb.indeterminate = false;
-  }
-  const checkboxes = document.querySelectorAll('.row-select-checkbox');
-  checkboxes.forEach(function(cb) {
-    cb.checked = false;
-    const row = cb.closest('tr');
-    if (row) row.classList.remove('selected');
-  });
-  updateBatchToolbar();
-}
-
-function executeBatchAction(targetStatus) {
-  const selectedIds = getSelectedJobIds();
-  if (selectedIds.length === 0) {
-    alert('No has seleccionado ninguna oferta.');
-    return;
-  }
-
-  let reason = null;
-  if (targetStatus === 'discarded') {
-    const promptResp = prompt('Motivo del descarte para las ' + selectedIds.length + ' ofertas seleccionadas (opcional, deja en blanco si no aplica):');
-    if (promptResp === null) return; // cancelado por usuario
-    reason = promptResp.trim() || null;
+function hideRow(row, hide) {
+  if (hide) {
+    row.classList.add('is-leaving');
+    setTimeout(function () { row.hidden = true; row.dataset.gone = '1'; refreshCount(); }, 180);
   } else {
-    const actionLabel = targetStatus === 'applied' ? 'como Solicitadas' : (targetStatus === 'interview' ? 'para Entrevista' : targetStatus);
-    if (!confirm('¿Deseas marcar ' + selectedIds.length + ' oferta' + (selectedIds.length !== 1 ? 's' : '') + ' ' + actionLabel + '?')) {
-      return;
-    }
+    row.dataset.gone = '';
+    row.hidden = false;
+    row.classList.remove('is-leaving');
+    refreshCount();
   }
+}
+
+function refreshCount() {
+  var n = rows().filter(function (r) { return !r.hidden; }).length;
+  $('#count').textContent = n + ' oferta' + (n !== 1 ? 's' : '');
+}
+
+var MSG = {
+  applied: 'Marcada como solicitada',
+  interview: 'Marcada para entrevista',
+  discarded: 'Oferta descartada',
+  new: 'Estado eliminado'
+};
+
+function setStatus(id, status) {
+  var row = document.getElementById('job-' + id);
+  if (!row) return;
+  var prev = paint(row, status);
+  var gone = leavesView(status);
+  if (gone) hideRow(row, true);
+
+  api(id, status)
+    .then(function () {
+      toast(MSG[status] || 'Actualizado', {
+        actionLabel: 'Deshacer',
+        onAction: function () {
+          api(id, prev).then(function () {
+            paint(row, prev);
+            if (gone) hideRow(row, false);
+          }).catch(function () { toast('No se pudo deshacer.', { error: true }); });
+        }
+      });
+    })
+    .catch(function () {
+      paint(row, prev);
+      if (gone) hideRow(row, false);
+      toast('No se pudo actualizar la oferta.', { error: true });
+    });
+}
+
+/* ============================================================
+   Selección múltiple
+   ============================================================ */
+function picked() {
+  return rows().filter(function (r) {
+    var cb = $('input[type=checkbox]', r);
+    return cb && cb.checked && !r.hidden;
+  });
+}
+function onPick(cb) {
+  cb.closest('.job').classList.toggle('is-selected', cb.checked);
+  syncBatchbar();
+}
+function clearPicks() {
+  rows().forEach(function (r) {
+    var cb = $('input[type=checkbox]', r);
+    if (cb) cb.checked = false;
+    r.classList.remove('is-selected');
+  });
+  syncBatchbar();
+}
+function syncBatchbar() {
+  var n = picked().length;
+  $('#batchbar').classList.toggle('is-open', n > 0);
+  var list = $('#list');
+  if (list) list.classList.toggle('has-selection', n > 0);
+  $('#batch-n').textContent = n + ' seleccionada' + (n !== 1 ? 's' : '');
+}
+
+function batch(status) {
+  var sel = picked();
+  if (!sel.length) return;
+  var ids = sel.map(function (r) { return parseInt(r.dataset.jobId, 10); });
+  var prevs = sel.map(function (r) { return r.dataset.status; });
+
+  sel.forEach(function (r) { paint(r, status); if (leavesView(status)) hideRow(r, true); });
+  clearPicks();
 
   fetch('/api/jobs/batch-status', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      job_ids: selectedIds,
-      status: targetStatus,
-      reason: reason
-    })
-  })
-  .then(function(resp) {
-    if (resp.ok) {
-      return resp.json();
-    }
-    return resp.json().then(function(data) {
-      throw new Error(data.detail || data.error || ('HTTP ' + resp.status));
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ job_ids: ids, status: status, reason: null })
+  }).then(function (r) {
+    if (!r.ok) throw new Error('http');
+    toast(ids.length + ' oferta' + (ids.length !== 1 ? 's' : '') + ' actualizada' + (ids.length !== 1 ? 's' : ''), {
+      actionLabel: 'Deshacer',
+      onAction: function () {
+        Promise.all(sel.map(function (r, i) { return api(r.dataset.jobId, prevs[i]); }))
+          .then(function () {
+            sel.forEach(function (r, i) { paint(r, prevs[i]); hideRow(r, false); });
+          })
+          .catch(function () { location.reload(); });
+      }
     });
-  })
-  .then(function(data) {
-    clearAllSelections();
-    location.reload();
-  })
-  .catch(function(err) {
-    alert('Error al aplicar la acción múltiple: ' + err.message);
+  }).catch(function () {
+    sel.forEach(function (r, i) { paint(r, prevs[i]); hideRow(r, false); });
+    toast('No se pudo aplicar la acción.', { error: true });
   });
 }
 
-function setJobStatus(id, targetStatus) {
-  fetch('/api/job/' + id + '/status', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({status: targetStatus, reason: null})
-  }).then(function(resp) {
-    if (resp.ok) {
-      const currentUrl = new URL(window.location.href);
-      const currentStatus = currentUrl.searchParams.get('status');
-      if (currentStatus && currentStatus !== 'all') {
-        location.reload();
-      } else {
-        const statusCell = document.getElementById('job-status-cell-' + id);
-        const actionsCell = document.getElementById('job-actions-cell-' + id);
-        if (statusCell) {
-          if (targetStatus === 'interview') {
-            statusCell.innerHTML = '<span class="badge" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;font-weight:600;">📞 Entrevista</span>';
-            statusCell.setAttribute('data-value', 'interview');
-          } else if (targetStatus === 'applied') {
-            statusCell.innerHTML = '<span class="badge" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;font-weight:600;">✓ Solicitada</span>';
-            statusCell.setAttribute('data-value', 'applied');
-          } else {
-            statusCell.innerHTML = '<span class="badge" style="background:#f1f5f9;color:#475569;">Nueva</span>';
-            statusCell.setAttribute('data-value', 'new');
-          }
-        }
-        if (actionsCell) {
-          let buttonsHtml = '';
-          if (targetStatus === 'interview') {
-            buttonsHtml = '<button type="button" class="action-btn action-btn-secondary" onclick="setJobStatus(' + id + ', \'applied\')" title="Volver a estado Solicitada">↩ Solicitada</button>';
-          } else if (targetStatus === 'applied') {
-            buttonsHtml = '<button type="button" class="action-btn action-btn-interview" onclick="setJobStatus(' + id + ', \'interview\')" title="¡Me han llamado para entrevista!">📞 Entrevista</button>' +
-                          '<button type="button" class="action-btn action-btn-secondary" onclick="setJobStatus(' + id + ', \'new\')" title="Desmarcar estado solicitada">Quitar</button>';
-          } else {
-            buttonsHtml = '<button type="button" class="action-btn action-btn-applied" onclick="setJobStatus(' + id + ', \'applied\')" title="Marcar como oferta solicitada/inscrita">✓ Solicitada</button>' +
-                          '<button type="button" class="action-btn action-btn-interview" onclick="setJobStatus(' + id + ', \'interview\')" title="Marcar directamente para entrevista">📞 Entrevista</button>';
-          }
-          actionsCell.innerHTML = buttonsHtml + '<button type="button" class="action-btn action-btn-danger" onclick="discardJob(' + id + ')" title="Descartar de la lista">✕ Descartar</button>';
-        }
-      }
-    } else {
-      resp.json().then(function(data) {
-        alert('No se pudo actualizar el estado: ' + (data.detail || data.error || ('HTTP ' + resp.status)));
-      }).catch(function() {
-        alert('No se pudo actualizar el estado de la oferta (HTTP ' + resp.status + ').');
-      });
-    }
-  }).catch(function(err) {
-    alert('Error de conexión con el servidor: ' + err.message);
-  });
-}
-
-function setJobStatusDetail(id, targetStatus) {
-  fetch('/api/job/' + id + '/status', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({status: targetStatus, reason: null})
-  }).then(function(resp) {
-    if (resp.ok) {
-      location.reload();
-    } else {
-      resp.json().then(function(data) {
-        alert('No se pudo actualizar el estado: ' + (data.detail || data.error || ('HTTP ' + resp.status)));
-      }).catch(function() {
-        alert('No se pudo actualizar el estado de la oferta (HTTP ' + resp.status + ').');
-      });
-    }
-  }).catch(function(err) {
-    alert('Error de conexión con el servidor: ' + err.message);
-  });
-}
-
-
-function markApplied(id, isApplied) {
-  setJobStatus(id, isApplied ? 'applied' : 'new');
-}
-
-function markAppliedDetail(id, isApplied) {
-  setJobStatusDetail(id, isApplied ? 'applied' : 'new');
-}
-
-function discardJob(id) {
-  const reason = prompt('Motivo del descarte (opcional, deja vacio para descartar sin motivo):');
-  if (reason === null) return;
-  fetch('/api/job/' + id + '/status', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({status: 'discarded', reason: reason.trim() || null})
-  }).then(function(resp) {
-    if (resp.ok) {
-      const row = document.getElementById('job-row-' + id);
-      if (row) {
-        row.remove();
-        updateBatchToolbar();
-      } else {
-        location.href = '/dashboard';
-      }
-    } else {
-      alert('No se pudo descartar la oferta.');
-    }
-  });
-}
-
-function restoreJob(id) {
-  fetch('/api/job/' + id + '/status', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({status: 'new', reason: null})
-  }).then(function(resp) {
-    if (resp.ok) {
-      location.reload();
-    } else {
-      alert('No se pudo restaurar la oferta.');
-    }
-  });
-}
-
-let discoveryPollInterval = null;
+/* ============================================================
+   Búsqueda de ofertas (discovery)
+   ============================================================ */
+var pollTimer = null;
 
 function updateDiscoveryButtonText() {
-  const sel = document.getElementById('discovery-source-select');
-  const btnText = document.getElementById('btn-discovery-text');
-  if (!sel || !btnText) return;
-  const val = sel.value;
-  if (val === 'all') {
-    btnText.innerText = 'Buscar en todas las fuentes';
-  } else if (val === 'linkedin') {
-    btnText.innerText = 'Buscar en LinkedIn';
-  } else {
-    const opt = sel.options[sel.selectedIndex];
-    const cleanLabel = opt ? opt.text.split('(')[0].trim() : val;
-    btnText.innerText = 'Buscar en ' + cleanLabel;
-  }
+  var sel = $('#discovery-source-select'), txt = $('#btn-discovery-text');
+  if (!sel || !txt) return;
+  if (sel.value === 'all') txt.textContent = 'Buscar ofertas';
+  else txt.textContent = 'Buscar en ' + sel.options[sel.selectedIndex].text.split('(')[0].trim();
+}
+
+function banner(kind, html) {
+  var b = $('#discovery-status-banner');
+  if (!b) return;
+  if (!kind) { b.hidden = true; return; }
+  b.className = 'banner banner-' + kind;
+  b.innerHTML = html;
+  b.hidden = false;
+}
+
+function setDiscoveryBusy(busy, label) {
+  var btn = $('#btn-trigger-discovery'), txt = $('#btn-discovery-text');
+  if (btn) btn.disabled = busy;
+  if (busy && txt) txt.textContent = label || 'Buscando…';
+  if (!busy) updateDiscoveryButtonText();
 }
 
 function checkDiscoveryStatus() {
   fetch('/api/jobs/discovery-status')
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      const btn = document.getElementById('btn-trigger-discovery');
-      const btnText = document.getElementById('btn-discovery-text');
-      const btnIcon = document.getElementById('btn-discovery-icon');
-      const banner = document.getElementById('discovery-status-banner');
-
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
       if (data.status === 'running') {
-        if (btn) {
-          btn.disabled = true;
-          btn.style.opacity = '0.7';
-          btn.style.cursor = 'not-allowed';
-        }
-        if (btnIcon) btnIcon.innerText = '⏳';
-        if (btnText) btnText.innerText = 'Búsqueda en curso...';
-        if (banner) {
-          banner.style.display = 'block';
-          banner.style.background = '#eff6ff';
-          banner.style.color = '#1d4ed8';
-          banner.style.border = '1px solid #bfdbfe';
-          banner.innerHTML = '<strong>Búsqueda activa:</strong> ' + (data.message || 'Procesando en segundo plano...');
-        }
-        if (!discoveryPollInterval) {
-          discoveryPollInterval = setInterval(checkDiscoveryStatus, 3000);
-        }
-      } else {
-        if (discoveryPollInterval) {
-          clearInterval(discoveryPollInterval);
-          discoveryPollInterval = null;
-        }
-        if (btn) {
-          btn.disabled = false;
-          btn.style.opacity = '1';
-          btn.style.cursor = 'pointer';
-        }
-        if (btnIcon) btnIcon.innerText = '🔍';
-        updateDiscoveryButtonText();
+        setDiscoveryBusy(true, 'Buscando…');
+        banner('info', '<span class="spinner"></span><span>' + (data.message || 'Búsqueda en curso en segundo plano…') + '</span>');
+        if (!pollTimer) pollTimer = setInterval(checkDiscoveryStatus, 3000);
+        return;
+      }
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      setDiscoveryBusy(false);
 
-        if (data.status === 'completed') {
-          const lastAck = sessionStorage.getItem('discovery_last_ack');
-          if (banner && lastAck !== data.finished_at) {
-            sessionStorage.setItem('discovery_last_ack', data.finished_at);
-            fetch('/api/jobs/discovery-ack', { method: 'POST' }).catch(function() {});
-            banner.style.display = 'block';
-            banner.style.background = '#ecfdf5';
-            banner.style.color = '#047857';
-            banner.style.border = '1px solid #a7f3d0';
-            banner.innerHTML = '<strong>✓ ' + data.message + '</strong> Actualizando listado...';
-            setTimeout(function() { location.reload(); }, 1500);
-          } else if (banner && lastAck === data.finished_at) {
-            banner.style.display = 'none';
-          }
-        } else if (data.status === 'error') {
-          const lastErrorAck = sessionStorage.getItem('discovery_last_error');
-          if (banner && lastErrorAck !== data.finished_at) {
-            sessionStorage.setItem('discovery_last_error', data.finished_at);
-            fetch('/api/jobs/discovery-ack', { method: 'POST' }).catch(function() {});
-            banner.style.display = 'block';
-            banner.style.background = '#fef2f2';
-            banner.style.color = '#b91c1c';
-            banner.style.border = '1px solid #fecaca';
-            banner.innerHTML = '<strong>Aviso:</strong> ' + data.message;
-          }
+      if (data.status === 'completed') {
+        if (sessionStorage.getItem('discovery_ack') !== data.finished_at) {
+          sessionStorage.setItem('discovery_ack', data.finished_at);
+          fetch('/api/jobs/discovery-ack', { method: 'POST' }).catch(function () {});
+          banner('good', '<span>' + data.message + ' Actualizando…</span>');
+          setTimeout(function () { location.reload(); }, 1200);
+        } else { banner(null); }
+      } else if (data.status === 'error') {
+        if (sessionStorage.getItem('discovery_err') !== data.finished_at) {
+          sessionStorage.setItem('discovery_err', data.finished_at);
+          fetch('/api/jobs/discovery-ack', { method: 'POST' }).catch(function () {});
+          banner('bad', '<span>' + data.message + '</span>');
         }
       }
     })
-    .catch(function() {});
+    .catch(function () {});
 }
 
 function triggerDiscovery() {
-  sessionStorage.removeItem('discovery_last_ack');
-  sessionStorage.removeItem('discovery_last_error');
-
-  const sel = document.getElementById('discovery-source-select');
-  const selectedSource = sel ? sel.value : 'all';
-
-  const btn = document.getElementById('btn-trigger-discovery');
-  const btnText = document.getElementById('btn-discovery-text');
-  const btnIcon = document.getElementById('btn-discovery-icon');
-  if (btn) {
-    btn.disabled = true;
-    btn.style.opacity = '0.7';
-    btn.style.cursor = 'not-allowed';
-  }
-  if (btnIcon) btnIcon.innerText = '⏳';
-  if (btnText) btnText.innerText = 'Iniciando búsqueda...';
+  sessionStorage.removeItem('discovery_ack');
+  sessionStorage.removeItem('discovery_err');
+  var sel = $('#discovery-source-select');
+  setDiscoveryBusy(true, 'Iniciando…');
 
   fetch('/api/jobs/trigger-discovery', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ source: selectedSource })
+    body: JSON.stringify({ source: sel ? sel.value : 'all' })
   })
-    .then(function(r) {
-      return r.json().then(function(body) { return { status: r.status, body: body }; });
+    .then(function (r) { return r.json().then(function (b) { return { status: r.status, body: b }; }); })
+    .then(function (res) {
+      if (res.status === 200 || res.status === 409) checkDiscoveryStatus();
+      else { setDiscoveryBusy(false); toast(res.body.message || 'No se pudo iniciar la búsqueda.', { error: true }); }
     })
-    .then(function(res) {
-      if (res.status === 200 || res.status === 409) {
-        checkDiscoveryStatus();
-      } else {
-        alert(res.body.message || 'No se pudo iniciar la búsqueda.');
-        if (btn) {
-          btn.disabled = false;
-          btn.style.opacity = '1';
-          btn.style.cursor = 'pointer';
-        }
-        if (btnIcon) btnIcon.innerText = '🔍';
-        updateDiscoveryButtonText();
-      }
-    })
-    .catch(function() {
-      alert('Error de conexión al iniciar la búsqueda.');
-      if (btn) {
-        btn.disabled = false;
-        btn.style.opacity = '1';
-        btn.style.cursor = 'pointer';
-      }
-      if (btnIcon) btnIcon.innerText = '🔍';
-      updateDiscoveryButtonText();
+    .catch(function () {
+      setDiscoveryBusy(false);
+      toast('Error de conexión al iniciar la búsqueda.', { error: true });
     });
 }
 
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
   updateDiscoveryButtonText();
   checkDiscoveryStatus();
 });

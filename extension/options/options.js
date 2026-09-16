@@ -80,6 +80,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initForm();
   initCVHandling();
   initActions();
+  initExtensionState();
   loadSavedData();
 });
 
@@ -368,4 +369,71 @@ function showToast(message, icon = '✅') {
   toastTimeout = setTimeout(() => {
     toast.classList.add('hidden');
   }, 3200);
+}
+
+// Extension Enable/Disable State
+function initExtensionState() {
+  const toggle = document.getElementById('options-toggle-extension');
+  if (!toggle) return;
+
+  // Load initial state
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get(['job_autofill_enabled'], (res) => {
+      const isEnabled = res.job_autofill_enabled !== false;
+      updateOptionsPowerUI(isEnabled);
+    });
+
+    // Listen to changes from popup or background
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && changes.job_autofill_enabled !== undefined) {
+        updateOptionsPowerUI(changes.job_autofill_enabled.newValue !== false);
+      }
+    });
+  } else {
+    const stored = localStorage.getItem('job_autofill_enabled');
+    const isEnabled = stored === null ? true : stored === 'true';
+    updateOptionsPowerUI(isEnabled);
+  }
+
+  toggle.addEventListener('change', (e) => {
+    const isEnabled = e.target.checked;
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.set({ job_autofill_enabled: isEnabled }, () => {
+        updateOptionsPowerUI(isEnabled);
+        showToast(
+          isEnabled ? 'Extensión activada' : 'Extensión pausada temporalmente',
+          isEnabled ? '✅' : '⏸️'
+        );
+      });
+    } else {
+      localStorage.setItem('job_autofill_enabled', isEnabled ? 'true' : 'false');
+      updateOptionsPowerUI(isEnabled);
+      showToast(
+        isEnabled ? 'Extensión activada' : 'Extensión desactivada',
+        isEnabled ? '✅' : '⏸️'
+      );
+    }
+  });
+}
+
+function updateOptionsPowerUI(isActive) {
+  const card = document.getElementById('options-power-card');
+  const title = document.getElementById('options-status-title');
+  const toggle = document.getElementById('options-toggle-extension');
+
+  if (toggle) {
+    toggle.checked = isActive;
+  }
+
+  if (card) {
+    if (isActive) {
+      card.classList.remove('disabled');
+    } else {
+      card.classList.add('disabled');
+    }
+  }
+
+  if (title) {
+    title.textContent = isActive ? 'Extensión Activa' : 'Extensión Pausada';
+  }
 }

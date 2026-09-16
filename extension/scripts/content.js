@@ -619,8 +619,45 @@
     return count;
   }
 
+  // Active / Inactive State Management
+  let isExtensionActive = true;
+
+  function refreshActiveState(callback) {
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.get(['job_autofill_enabled'], (res) => {
+        isExtensionActive = res?.job_autofill_enabled !== false;
+        if (callback) callback(isExtensionActive);
+      });
+    } else {
+      const stored = localStorage.getItem('job_autofill_enabled');
+      isExtensionActive = stored === null ? true : stored === 'true';
+      if (callback) callback(isExtensionActive);
+    }
+  }
+
+  // Listen to state changes from popup or options
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && changes.job_autofill_enabled !== undefined) {
+        isExtensionActive = changes.job_autofill_enabled.newValue !== false;
+        if (!isExtensionActive) {
+          const container = document.getElementById('jobautofill-fab-container');
+          if (container) container.remove();
+        } else {
+          updateOrRenderFloatingWidget();
+        }
+      }
+    });
+  }
+
   // Floating Action Button (Widget) on page
   function updateOrRenderFloatingWidget() {
+    if (!isExtensionActive) {
+      const container = document.getElementById('jobautofill-fab-container');
+      if (container) container.remove();
+      return;
+    }
+
     const potentialCount = countFillableFields();
     if (potentialCount === 0 && !document.getElementById('jobautofill-fab-container')) {
       return;
@@ -643,6 +680,8 @@
 
       const fab = document.getElementById('jobautofill-fab');
       fab.addEventListener('click', () => {
+        if (!isExtensionActive) return;
+
         if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
           chrome.storage.local.get(['job_autofill_profile'], (result) => {
             const profile = result?.job_autofill_profile;
@@ -676,6 +715,7 @@
         }
       }
       if (hasFormChanges) {
+        if (!isExtensionActive) return;
         if (mutationDebounceTimer) clearTimeout(mutationDebounceTimer);
         mutationDebounceTimer = setTimeout(() => {
           updateOrRenderFloatingWidget();
@@ -693,6 +733,15 @@
   if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (request.action === 'AUTOFILL') {
+        if (!isExtensionActive) {
+          sendResponse({
+            success: false,
+            filledCount: 0,
+            message: 'La extensión JobAutoFill está desactivada. Actívala desde el popup para rellenar.'
+          });
+          return false;
+        }
+
         if (request.profile) {
           const result = autofillJobForm(request.profile);
           sendResponse(result);
@@ -708,13 +757,18 @@
   }
 
   // Initialize
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-      updateOrRenderFloatingWidget();
+  function initContentScript() {
+    refreshActiveState((active) => {
+      if (active) {
+        updateOrRenderFloatingWidget();
+      }
       observeDynamicForms();
     });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initContentScript);
   } else {
-    updateOrRenderFloatingWidget();
-    observeDynamicForms();
+    initContentScript();
   }
 })();

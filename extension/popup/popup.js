@@ -1,12 +1,14 @@
 // popup.js - JobAutoFill Popup Action Controller
 
 let currentProfile = null;
+let isExtensionActive = true;
 
 document.addEventListener('DOMContentLoaded', () => {
   initPopup();
 });
 
 function initPopup() {
+  loadExtensionState();
   loadProfile();
 
   // Button Listeners
@@ -15,6 +17,83 @@ function initPopup() {
   document.getElementById('btn-autofill-now').addEventListener('click', triggerAutofill);
   document.getElementById('btn-copy-cv-path').addEventListener('click', copyCVPath);
   document.getElementById('btn-download-cv').addEventListener('click', downloadCV);
+
+  // Power switch listener
+  const toggleSwitch = document.getElementById('toggle-extension-active');
+  if (toggleSwitch) {
+    toggleSwitch.addEventListener('change', onToggleExtensionState);
+  }
+}
+
+function loadExtensionState() {
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get(['job_autofill_enabled'], (result) => {
+      isExtensionActive = result.job_autofill_enabled !== false; // default true
+      updatePowerUI(isExtensionActive);
+    });
+  } else {
+    // Fallback for standalone/local environment
+    const stored = localStorage.getItem('job_autofill_enabled');
+    isExtensionActive = stored === null ? true : stored === 'true';
+    updatePowerUI(isExtensionActive);
+  }
+}
+
+function onToggleExtensionState(e) {
+  isExtensionActive = e.target.checked;
+
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.set({ job_autofill_enabled: isExtensionActive }, () => {
+      updatePowerUI(isExtensionActive);
+      setStatus(
+        isExtensionActive ? 'Extensión activada con éxito' : 'Extensión desactivada / pausada',
+        isExtensionActive ? '✅' : '⏸️'
+      );
+    });
+  } else {
+    localStorage.setItem('job_autofill_enabled', isExtensionActive ? 'true' : 'false');
+    updatePowerUI(isExtensionActive);
+    setStatus(
+      isExtensionActive ? 'Extensión activada' : 'Extensión desactivada',
+      isExtensionActive ? '✅' : '⏸️'
+    );
+  }
+}
+
+function updatePowerUI(isActive) {
+  const card = document.getElementById('power-card');
+  const title = document.getElementById('power-title');
+  const desc = document.getElementById('power-desc');
+  const toggle = document.getElementById('toggle-extension-active');
+  const autofillBtn = document.getElementById('btn-autofill-now');
+
+  if (toggle) {
+    toggle.checked = isActive;
+  }
+
+  if (card) {
+    if (isActive) {
+      card.classList.remove('disabled');
+    } else {
+      card.classList.add('disabled');
+    }
+  }
+
+  if (title) {
+    title.textContent = isActive ? 'Extensión Activada' : 'Extensión Desactivada';
+  }
+
+  if (desc) {
+    desc.textContent = isActive ? 'Detección y rellenado disponibles' : 'Pausada temporalmente en todas las páginas';
+  }
+
+  if (autofillBtn) {
+    if (isActive) {
+      autofillBtn.classList.remove('disabled-action');
+    } else {
+      autofillBtn.classList.add('disabled-action');
+    }
+  }
 }
 
 function openOptions() {
@@ -83,6 +162,11 @@ function getInitials(name) {
 }
 
 async function triggerAutofill() {
+  if (!isExtensionActive) {
+    setStatus('La extensión está desactivada. Actívala arriba para rellenar.', '⏸️');
+    return;
+  }
+
   setStatus('Analizando formulario de la página...', '🔍');
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });

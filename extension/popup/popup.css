@@ -94,6 +94,124 @@ body {
   border-color: #475569;
 }
 
+/* Power State Card */
+.power-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  transition: all 0.25s ease;
+}
+
+.power-card.disabled {
+  background: rgba(30, 41, 59, 0.55);
+  border-color: rgba(71, 85, 105, 0.4);
+}
+
+.power-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.power-status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.65);
+  flex-shrink: 0;
+  transition: all 0.25s ease;
+}
+
+.power-card.disabled .power-status-dot {
+  background: #64748b;
+  box-shadow: none;
+}
+
+.power-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.power-text strong {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.25;
+  transition: color 0.2s;
+}
+
+.power-card.disabled .power-text strong {
+  color: #94a3b8;
+}
+
+.power-text span {
+  font-size: 11px;
+  color: var(--text-secondary);
+  transition: color 0.2s;
+}
+
+.power-card.disabled .power-text span {
+  color: #64748b;
+}
+
+/* Modern Toggle Switch */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #334155;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 24px;
+  border: 1px solid #475569;
+}
+
+.toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background-color: #10b981;
+  border-color: #059669;
+}
+
+.toggle-switch input:checked + .toggle-slider:before {
+  transform: translateX(20px);
+}
+
+.toggle-switch input:focus + .toggle-slider {
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.3);
+}
+
 /* Profile Card */
 .profile-card {
   display: flex;
@@ -192,6 +310,20 @@ body {
 
 .btn-primary-action:active {
   transform: translateY(0);
+}
+
+.btn-primary-action.disabled-action {
+  background: #1e293b !important;
+  color: #64748b !important;
+  border: 1px solid #334155 !important;
+  box-shadow: none !important;
+  cursor: not-allowed !important;
+  transform: none !important;
+}
+
+.btn-primary-action.disabled-action .btn-icon {
+  filter: grayscale(1);
+  opacity: 0.5;
 }
 
 .btn-icon {

@@ -251,7 +251,21 @@
     {% elif dst == 'discarded' %}<span class="chip">Descartada</span>{% endif %}
     {% if detail.salary_raw %}<span class="chip chip-good">{{ detail.salary_raw }}</span>{% endif %}
     {% if detail.remote_type %}<span class="chip">{{ detail.remote_type }}</span>{% endif %}
-    <span class="chip">{{ detail.source }}</span>
+    {% set dsrc = (detail.source or 'linkedin') | lower %}
+    <span class="chip-source chip-src-{{ dsrc }}" title="Oferta obtenida de {{ 'LinkedIn' if dsrc == 'linkedin' else ('InfoJobs' if dsrc == 'infojobs' else ('Indeed' if dsrc == 'indeed' else ('TopSalaries' if dsrc == 'topsalaries' else detail.source|capitalize))) }}">
+      {% if dsrc == 'linkedin' %}
+        <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" style="flex-shrink:0"><path d="M19 3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14m-.5 15.5v-5.3a3.26 3.26 0 0 0-3.26-3.26c-.85 0-1.84.52-2.28 1.3v-1.11h-2.79v8.37h2.79v-4.93c0-.77.62-1.4 1.39-1.4a1.4 1.4 0 0 1 1.4 1.4v4.93h2.75M6.46 10.9v8.37H9.2V10.9H6.46M7.83 6.2a1.64 1.64 0 0 0-1.64 1.63c0 .91.74 1.64 1.64 1.64s1.64-.73 1.64-1.64A1.64 1.64 0 0 0 7.83 6.2Z"/></svg>
+        LinkedIn
+      {% elif dsrc == 'infojobs' %}
+        InfoJobs
+      {% elif dsrc == 'indeed' %}
+        Indeed
+      {% elif dsrc == 'topsalaries' %}
+        TopSalaries
+      {% else %}
+        {{ detail.source | capitalize }}
+      {% endif %}
+    </span>
     {% if detail.recommendation == 'skip' %}<span class="chip chip-bad">No cumple requisitos</span>{% endif %}
   </div>
 </div>
@@ -297,8 +311,9 @@
     </div>
 
     <div class="meta-list">
-      <div><span class="k">Publicada</span><span class="v">{{ detail.posted_at.strftime('%d/%m/%Y') if detail.posted_at else '—' }}</span></div>
-      <div><span class="k">Detectada</span><span class="v">{{ detail.fetched_at.strftime('%d/%m/%Y') if detail.fetched_at else '—' }}</span></div>
+      <div><span class="k">Fuente</span><span class="v"><span class="chip-source chip-src-{{ dsrc }}">{{ 'LinkedIn' if dsrc == 'linkedin' else ('InfoJobs' if dsrc == 'infojobs' else ('Indeed' if dsrc == 'indeed' else ('TopSalaries' if dsrc == 'topsalaries' else detail.source|capitalize))) }}</span></span></div>
+      <div><span class="k">Publicada</span><span class="v">{{ detail.posted_at.strftime('%d/%m/%Y') if detail.posted_at else 'No disponible' }}</span></div>
+      <div><span class="k">Añadida al portal</span><span class="v">{{ detail.fetched_at.strftime('%d/%m/%Y') if detail.fetched_at else '—' }}</span></div>
       <div><span class="k">Score LLM</span><span class="v">{{ detail.llm_score if detail.llm_score is not none else 'pendiente' }}</span></div>
       <div><span class="k">Variante</span><span class="v">{{ detail.variant_query or '—' }}</span></div>
     </div>
@@ -395,7 +410,8 @@
         <div class="field">
           <label for="f-sort">Ordenar por</label>
           <select id="f-sort" onchange="setParam('sort', this.value)">
-            <option value="recent" {{ 'selected' if sort in (none, 'recent') else '' }}>Más recientes</option>
+            <option value="recent" {{ 'selected' if sort in (none, 'recent') else '' }}>Más recientes (añadidas al portal)</option>
+            <option value="posted" {{ 'selected' if sort == 'posted' else '' }}>Más recientes (publicadas)</option>
             <option value="score" {{ 'selected' if sort == 'score' else '' }}>Mayor puntuación</option>
           </select>
         </div>
@@ -468,14 +484,42 @@
       </div>
       <div class="job-meta">
         <span class="co">{{ job.company }}</span>
+        {% set src = (job.source or 'linkedin') | lower %}
+        <span class="chip-source chip-src-{{ src }}" title="Fuente: {{ 'LinkedIn' if src == 'linkedin' else ('InfoJobs' if src == 'infojobs' else ('Indeed' if src == 'indeed' else ('TopSalaries' if src == 'topsalaries' else job.source|capitalize))) }}">
+          {% if src == 'linkedin' %}
+            <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor" style="flex-shrink:0"><path d="M19 3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14m-.5 15.5v-5.3a3.26 3.26 0 0 0-3.26-3.26c-.85 0-1.84.52-2.28 1.3v-1.11h-2.79v8.37h2.79v-4.93c0-.77.62-1.4 1.39-1.4a1.4 1.4 0 0 1 1.4 1.4v4.93h2.75M6.46 10.9v8.37H9.2V10.9H6.46M7.83 6.2a1.64 1.64 0 0 0-1.64 1.63c0 .91.74 1.64 1.64 1.64s1.64-.73 1.64-1.64A1.64 1.64 0 0 0 7.83 6.2Z"/></svg>
+            LinkedIn
+          {% elif src == 'infojobs' %}
+            InfoJobs
+          {% elif src == 'indeed' %}
+            Indeed
+          {% elif src == 'topsalaries' %}
+            TopSalaries
+          {% else %}
+            {{ job.source | capitalize }}
+          {% endif %}
+        </span>
         {% if job.location %}<span class="sep">·</span><span>{{ job.location }}</span>{% endif %}
         {% set rt = (job.remote_type or '') | lower %}
         {% if 'remote' in rt or 'remoto' in rt %}<span class="sep">·</span><span>Remoto</span>
         {% elif 'hybrid' in rt or 'hibrido' in rt or 'híbrido' in rt %}<span class="sep">·</span><span>Híbrido</span>
         {% elif 'onsite' in rt or 'presencial' in rt %}<span class="sep">·</span><span>Presencial</span>{% endif %}
         {% if job.salary_raw %}<span class="chip chip-good">{{ job.salary_raw }}</span>{% endif %}
-        <span class="sep">·</span>
-        <span>{{ (job.posted_at or job.fetched_at).strftime('%d/%m/%y') if (job.posted_at or job.fetched_at) else '—' }}</span>
+        {% if job.posted_at %}
+          <span class="sep">·</span>
+          <span title="Fecha de publicación original de la oferta: {{ job.posted_at.strftime('%d/%m/%Y') }}">
+            <span style="color:var(--text-muted); font-size:.76rem; font-weight:500;">Publicada:</span> {{ job.posted_at.strftime('%d/%m/%y') }}
+          </span>
+        {% endif %}
+        {% if job.fetched_at %}
+          <span class="sep">·</span>
+          <span title="Fecha en que se añadió a la app / portal: {{ job.fetched_at.strftime('%d/%m/%Y') }}">
+            <span style="color:var(--text-muted); font-size:.76rem; font-weight:500;">Añadida:</span> {{ job.fetched_at.strftime('%d/%m/%y') }}
+          </span>
+        {% elif not job.posted_at %}
+          <span class="sep">·</span>
+          <span>—</span>
+        {% endif %}
       </div>
     </div>
 

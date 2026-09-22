@@ -84,6 +84,7 @@ def seed_mock_jobs():
                 "location": "Madrid, España",
                 "remote_type": "hybrid",
                 "source": "linkedin",
+                "is_easy_apply": True,
                 "salary_raw": "75.000 € - 90.000 €",
                 "salary_min": 75000,
                 "salary_max": 90000,
@@ -308,8 +309,8 @@ def seed_mock_jobs():
             # Insertar o actualizar job_offer
             jo_id = conn.execute(
                 text("""
-                    INSERT INTO job_offer (user_id, external_id, title, company, location, remote_type, description, apply_link, source, salary_raw, salary_min, salary_max, posted_at, fetched_at, variant_id)
-                    VALUES (:uid, :ext_id, :title, :company, :location, :remote, :desc, :link, :src, :sal_raw, :sal_min, :sal_max, :posted, :fetched, :var_id)
+                    INSERT INTO job_offer (user_id, external_id, title, company, location, remote_type, description, apply_link, source, salary_raw, salary_min, salary_max, posted_at, fetched_at, variant_id, is_easy_apply)
+                    VALUES (:uid, :ext_id, :title, :company, :location, :remote, :desc, :link, :src, :sal_raw, :sal_min, :sal_max, :posted, :fetched, :var_id, :is_easy)
                     ON CONFLICT (user_id, external_id) DO UPDATE SET
                         title = EXCLUDED.title,
                         company = EXCLUDED.company,
@@ -317,7 +318,8 @@ def seed_mock_jobs():
                         remote_type = EXCLUDED.remote_type,
                         salary_raw = EXCLUDED.salary_raw,
                         apply_link = EXCLUDED.apply_link,
-                        variant_id = EXCLUDED.variant_id
+                        variant_id = EXCLUDED.variant_id,
+                        is_easy_apply = EXCLUDED.is_easy_apply
                     RETURNING id;
                 """),
                 {
@@ -335,7 +337,8 @@ def seed_mock_jobs():
                     "sal_max": job["salary_max"],
                     "posted": posted_date,
                     "fetched": fetched_date,
-                    "var_id": var_id
+                    "var_id": var_id,
+                    "is_easy": bool(job.get("is_easy_apply", False))
                 }
             ).fetchone()[0]
 

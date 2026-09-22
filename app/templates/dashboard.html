@@ -266,6 +266,11 @@
         {{ detail.source | capitalize }}
       {% endif %}
     </span>
+    {% if detail.is_easy_apply %}
+      <span class="chip-easy-apply" title="Esta oferta permite postular directamente en LinkedIn con Solicitud sencilla (Easy Apply)">
+        ⚡ Solicitud sencilla
+      </span>
+    {% endif %}
     {% if detail.recommendation == 'skip' %}<span class="chip chip-bad">No cumple requisitos</span>{% endif %}
   </div>
 </div>
@@ -280,24 +285,27 @@
     {% if detail.cons %}<ul>{% for c in detail.cons %}<li>{{ c }}</li>{% endfor %}</ul>
     {% else %}<p class="none">Sin datos.</p>{% endif %}
 
-    <h3>Requisitos que faltan</h3>
+    <h3>Requisitos faltantes</h3>
     {% if detail.missing_requirements %}<ul>{% for m in detail.missing_requirements %}<li>{{ m }}</li>{% endfor %}</ul>
     {% else %}<p class="none">Ninguno detectado.</p>{% endif %}
 
-    {% if dst == 'discarded' and detail.discard_reason %}
-      <h3>Motivo del descarte</h3>
-      <p class="none">{{ detail.discard_reason }}</p>
-    {% endif %}
+    <h3>Descripción de la oferta</h3>
+    <div class="job-desc">{{ detail.description }}</div>
   </div>
 
-  <div class="card">
-    <div class="side-actions">
-      <a class="btn btn-primary" href="{{ detail.apply_link }}" target="_blank" rel="noopener noreferrer">Ver oferta original ↗</a>
-      {% if dst == 'interview' %}
-        <button type="button" class="btn" onclick="detailStatus({{ detail.id }}, 'applied')">Volver a solicitada</button>
-        <button type="button" class="btn btn-quiet" onclick="detailStatus({{ detail.id }}, 'new')">Quitar estado</button>
+  <div class="card detail-sidebar">
+    <div class="apply-box">
+      <a class="btn btn-primary" href="{{ detail.apply_link }}" target="_blank" rel="noopener noreferrer" style="width:100%">
+        {% if detail.is_easy_apply %}⚡ Postular con Solicitud sencilla{% else %}Abrir oferta original{% endif %}
+      </a>
+      {% if dst == 'new' or dst == 'viewed' %}
+        <button type="button" class="btn" onclick="detailStatus({{ detail.id }}, 'applied')">Marcar solicitada</button>
+        <button type="button" class="btn" onclick="detailStatus({{ detail.id }}, 'interview')">Marcar entrevista</button>
       {% elif dst == 'applied' %}
         <button type="button" class="btn" onclick="detailStatus({{ detail.id }}, 'interview')">Marcar entrevista</button>
+        <button type="button" class="btn btn-quiet" onclick="detailStatus({{ detail.id }}, 'new')">Quitar estado</button>
+      {% elif dst == 'interview' %}
+        <button type="button" class="btn" onclick="detailStatus({{ detail.id }}, 'applied')">Volver a solicitada</button>
         <button type="button" class="btn btn-quiet" onclick="detailStatus({{ detail.id }}, 'new')">Quitar estado</button>
       {% elif dst != 'discarded' %}
         <button type="button" class="btn" onclick="detailStatus({{ detail.id }}, 'applied')">Marcar solicitada</button>
@@ -312,6 +320,9 @@
 
     <div class="meta-list">
       <div><span class="k">Fuente</span><span class="v"><span class="chip-source chip-src-{{ dsrc }}">{{ 'LinkedIn' if dsrc == 'linkedin' else ('InfoJobs' if dsrc == 'infojobs' else ('Indeed' if dsrc == 'indeed' else ('TopSalaries' if dsrc == 'topsalaries' else detail.source|capitalize))) }}</span></span></div>
+      {% if detail.is_easy_apply %}
+      <div><span class="k">Modalidad</span><span class="v"><span class="chip-easy-apply">⚡ Solicitud sencilla</span></span></div>
+      {% endif %}
       <div><span class="k">Publicada</span><span class="v">{{ detail.posted_at.strftime('%d/%m/%Y') if detail.posted_at else 'No disponible' }}</span></div>
       <div><span class="k">Añadida al portal</span><span class="v">{{ detail.fetched_at.strftime('%d/%m/%Y') if detail.fetched_at else '—' }}</span></div>
       <div><span class="k">Score LLM</span><span class="v">{{ detail.llm_score if detail.llm_score is not none else 'pendiente' }}</span></div>
@@ -355,8 +366,8 @@
 {# ================================================================
    VISTA LISTA
    ================================================================ #}
-{% set filter_params = ('&source=' + source if source != 'all' else '') + ('&variant_id=' + variant_id if variant_id != 'all' else '') + ('&sort=' + sort if sort != 'recent' else '') + ('&show_skipped=1' if show_skipped else '') + ('&show_discarded=1' if show_discarded else '') %}
-{% set has_extra_filters = (source != 'all') or (variant_id != 'all') or (sort not in (none, 'recent')) or show_skipped or show_discarded %}
+{% set filter_params = ('&source=' + source if source != 'all' else '') + ('&variant_id=' + variant_id if variant_id != 'all' else '') + ('&sort=' + sort if sort != 'recent' else '') + ('&easy_apply=1' if easy_apply else '') + ('&show_skipped=1' if show_skipped else '') + ('&show_discarded=1' if show_discarded else '') %}
+{% set has_extra_filters = (source != 'all') or (variant_id != 'all') or (sort not in (none, 'recent')) or easy_apply or show_skipped or show_discarded %}
 
 <div class="page-head">
   <div>
@@ -437,6 +448,11 @@
         <div class="panel-sep"></div>
 
         <label class="check">
+          <input type="checkbox" {{ 'checked' if easy_apply else '' }} onchange="toggleParam('easy_apply')">
+          ⚡ Solo ofertas con Solicitud sencilla (Easy Apply)
+        </label>
+
+        <label class="check">
           <input type="checkbox" {{ 'checked' if show_skipped else '' }} onchange="toggleParam('show_skipped')">
           Incluir ofertas que no cumplen requisitos
         </label>
@@ -499,6 +515,9 @@
             {{ job.source | capitalize }}
           {% endif %}
         </span>
+        {% if job.is_easy_apply %}
+        <span class="chip-easy-apply" title="Oferta con Solicitud sencilla (Easy Apply en LinkedIn)">⚡ Solicitud sencilla</span>
+        {% endif %}
         {% if job.location %}<span class="sep">·</span><span>{{ job.location }}</span>{% endif %}
         {% set rt = (job.remote_type or '') | lower %}
         {% if 'remote' in rt or 'remoto' in rt %}<span class="sep">·</span><span>Remoto</span>

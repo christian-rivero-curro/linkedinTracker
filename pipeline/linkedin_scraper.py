@@ -379,6 +379,17 @@ def scrape_variant(page, query_text: str, location: str | None, remote_preferenc
 
             posted_at = _parse_relative_posted_at(metadata_text) or datetime.now(timezone.utc)
 
+            is_easy_apply = False
+            try:
+                apply_button_el = page.query_selector(".jobs-apply-button, [data-control-name='jobdetails_topcard_inapply'], .jobs-apply-button--top-card")
+                if apply_button_el:
+                    btn_text = (apply_button_el.inner_text() or "").lower()
+                    aria = (apply_button_el.get_attribute("aria-label") or "").lower()
+                    if "solicitud sencilla" in btn_text or "easy apply" in btn_text or "solicitud sencilla" in aria or "easy apply" in aria:
+                        is_easy_apply = True
+            except Exception:
+                pass
+
             jobs.append({
                 "external_id": f"linkedin_{job_id}",
                 "title": title,
@@ -391,6 +402,7 @@ def scrape_variant(page, query_text: str, location: str | None, remote_preferenc
                 "salary_min": None,
                 "salary_max": None,
                 "posted_at": posted_at.isoformat(),
+                "is_easy_apply": is_easy_apply,
             })
             _log(f"Extraida: '{title}' - {company or 'empresa desconocida'} (id={job_id}, descripcion={len(description)} caracteres)")
             _random_delay(0.8, 2.0)

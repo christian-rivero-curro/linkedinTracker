@@ -559,6 +559,31 @@ class LinkedInGuestClient:
         if salary_raw and not any(char.isdigit() for char in salary_raw):
             salary_raw = None
 
+        # Detección de "Solicitud sencilla" (Easy Apply / Onsite Apply)
+        is_easy_apply = False
+        apply_btn = (
+            soup.find("button", class_=lambda c: c and "apply-button" in c)
+            or soup.find("button", class_=lambda c: c and "top-card-layout__cta" in c)
+            or soup.find("a", class_=lambda c: c and "apply-button" in c)
+        )
+        if apply_btn:
+            tracking_name = (apply_btn.get("data-tracking-control-name") or "").lower()
+            btn_classes = " ".join(apply_btn.get("class") or []).lower()
+            btn_text = apply_btn.get_text().lower()
+            if (
+                "apply-link-onsite" in tracking_name
+                or "inapply" in tracking_name
+                or "easy-apply" in tracking_name
+                or "onsite" in btn_classes
+                or "inapply" in btn_classes
+                or "easy-apply" in btn_classes
+                or "sencilla" in btn_text
+                or "easy apply" in btn_text
+            ):
+                is_easy_apply = True
+        elif "apply-link-onsite" in resp.text:
+            is_easy_apply = True
+
         return {
             "job_id": job_id,
             "title": title,
@@ -568,6 +593,7 @@ class LinkedInGuestClient:
             "description": description,
             "salary_raw": salary_raw,
             "posted_at": posted_at,
+            "is_easy_apply": is_easy_apply,
         }
 
     def scrape_variant(
@@ -629,6 +655,7 @@ class LinkedInGuestClient:
                 "salary_max": None,
                 "salary_raw": salary_val,
                 "posted_at": posted_at.isoformat() if isinstance(posted_at, datetime) else str(posted_at),
+                "is_easy_apply": bool(detail and detail.get("is_easy_apply")),
             }
             jobs.append(job_dict)
             logger.info(f"  [{idx+1}/{len(listings)}] '{title}' - {company or 'empresa desconocida'} ({len(description)} chars desc)")

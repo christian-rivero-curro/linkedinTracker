@@ -42,6 +42,7 @@ async def lifespan(app: FastAPI):
         "UPDATE profile SET enabled_sources = '{\"linkedin\"}' WHERE enabled_sources IS NULL OR array_length(enabled_sources, 1) IS NULL;",
         "ALTER TABLE profile ADD COLUMN IF NOT EXISTS excluded_roles TEXT[] DEFAULT '{}';",
         "ALTER TABLE profile ADD COLUMN IF NOT EXISTS excluded_keywords TEXT[] DEFAULT '{}';",
+        "ALTER TABLE job_offer ADD COLUMN IF NOT EXISTS is_easy_apply BOOLEAN DEFAULT FALSE;",
         "ALTER TABLE job_score DROP CONSTRAINT IF EXISTS job_score_status_check;",
         "ALTER TABLE job_score DROP CONSTRAINT IF EXISTS job_score_status_check1;",
         """
@@ -630,6 +631,7 @@ def dashboard(
     status: str = "all",
     show_skipped: str = "",
     show_discarded: str = "",
+    easy_apply: str = "",
     variant_id: str = "all",
     source: str = "all",
     sort: str = "recent",
@@ -637,6 +639,7 @@ def dashboard(
 ):
     show_skipped_bool = _parse_bool_param(show_skipped)
     show_discarded_bool = _parse_bool_param(show_discarded)
+    easy_apply_bool = _parse_bool_param(easy_apply)
     user_id = current_user["id"]
     engine = get_engine()
 
@@ -644,7 +647,7 @@ def dashboard(
         SELECT js.id, jo.title, jo.company, jo.location, jo.remote_type, jo.apply_link,
                jo.source, jo.posted_at, jo.fetched_at, jo.variant_id, sqv.query_text AS variant_query,
                js.final_score, js.llm_score, js.status, js.llm_evaluated, js.recommendation, js.discard_reason,
-               jo.salary_raw
+               jo.salary_raw, jo.is_easy_apply
         FROM job_score js
         JOIN job_offer jo ON jo.id = js.job_offer_id
         LEFT JOIN search_query_variant sqv ON sqv.id = jo.variant_id
@@ -679,6 +682,8 @@ def dashboard(
     if source != "all" and source.strip():
         query += " AND jo.source = :source"
         params["source"] = source.strip().lower()
+    if easy_apply_bool:
+        query += " AND jo.is_easy_apply = TRUE"
 
     if sort == "score":
         query += " ORDER BY js.final_score DESC, jo.fetched_at DESC NULLS LAST LIMIT 100"
@@ -725,6 +730,7 @@ def dashboard(
             "status": status,
             "show_skipped": show_skipped_bool,
             "show_discarded": show_discarded_bool,
+            "easy_apply": easy_apply_bool,
             "variant_id": variant_id,
             "variants": variants,
             "pending_llm_count": pending_llm_count,
@@ -734,7 +740,6 @@ def dashboard(
             "available_sources": get_all_sources_metadata(),
         },
     )
-
 
 
 @app.get("/dashboard/{job_score_id}")
@@ -755,7 +760,7 @@ def dashboard_detail(request: Request, job_score_id: int, current_user: dict = D
             text("""
                 SELECT js.*, jo.title, jo.company, jo.location, jo.remote_type,
                        jo.description, jo.apply_link, jo.source, jo.posted_at, jo.fetched_at,
-                       jo.variant_id, sqv.query_text AS variant_query, jo.salary_raw
+                       jo.variant_id, sqv.query_text AS variant_query, jo.salary_raw, jo.is_easy_apply
                 FROM job_score js
                 JOIN job_offer jo ON jo.id = js.job_offer_id
                 LEFT JOIN search_query_variant sqv ON sqv.id = jo.variant_id

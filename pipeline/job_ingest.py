@@ -162,9 +162,9 @@ def process_and_store_job(
     result = conn.execute(
         text("""
             INSERT INTO job_offer (user_id, external_id, title, company, location, remote_type,
-                description, apply_link, source, salary_min, salary_max, salary_raw, posted_at, embedding, variant_id)
+                description, apply_link, source, salary_min, salary_max, salary_raw, posted_at, embedding, variant_id, is_easy_apply)
             VALUES (:user_id, :external_id, :title, :company, :location, :remote_type,
-                :description, :apply_link, :source, :salary_min, :salary_max, :salary_raw, :posted_at, CAST(:embedding AS vector), :variant_id)
+                :description, :apply_link, :source, :salary_min, :salary_max, :salary_raw, :posted_at, CAST(:embedding AS vector), :variant_id, :is_easy_apply)
             RETURNING id
         """),
         {
@@ -183,6 +183,7 @@ def process_and_store_job(
             "posted_at": posted_at,
             "embedding": to_pgvector_literal(job_embedding),
             "variant_id": variant_id,
+            "is_easy_apply": bool(job.get("is_easy_apply", False)),
         },
     )
     job_offer_id = result.scalar()

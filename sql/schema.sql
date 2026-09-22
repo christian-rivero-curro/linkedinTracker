@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS job_offer (
     salary_max INTEGER,
     posted_at TIMESTAMPTZ,
     embedding VECTOR(384),
+    is_easy_apply BOOLEAN DEFAULT FALSE,
     fetched_at TIMESTAMPTZ DEFAULT now()
 );
 

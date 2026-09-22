@@ -47,6 +47,7 @@ class JobOffer(Base):
     salary_raw = Column(String)
     posted_at = Column(TIMESTAMP)
     fetched_at = Column(TIMESTAMP)
+    is_easy_apply = Column(Boolean, default=False)
 
 
 class JobScore(Base):
